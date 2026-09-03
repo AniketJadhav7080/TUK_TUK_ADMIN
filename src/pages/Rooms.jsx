@@ -12,22 +12,42 @@ export default function Rooms() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [closeModal, setCloseModal] = useState(null)
+  const [deactivateModal, setDeactivateModal] = useState(null)
+  const [deleteModal, setDeleteModal] = useState(null)
+  const [hostChangeModal, setHostChangeModal] = useState(null)
+  const [newHostId, setNewHostId] = useState('')
   const [actionModal, setActionModal] = useState(null)
   const [actionType, setActionType] = useState('')
 
   const canClose = hasPermission(user, PERMISSIONS.CLOSE_ROOMS)
   const canMuteKick = hasPermission(user, PERMISSIONS.MUTE_KICK)
+  const canManage = hasPermission(user, PERMISSIONS.MANAGE_HOSTS) || hasPermission(user, PERMISSIONS.CLOSE_ROOMS)
+
+  const [activeCount, setActiveCount] = useState(null)
+  const [categoriesCount, setCategoriesCount] = useState(null)
+  const [totalParticipants, setTotalParticipants] = useState(null)
 
   useEffect(() => {
     setLoading(true)
     setError('')
-    api.getLiveRooms()
-      .then((data) => {
-        if (data?.rooms) setRooms(data.rooms)
+    const loadRooms = async () => {
+      try {
+        let data = null
+        try { data = await api.getPlatformOwnerRooms() } catch { data = await api.getLiveRooms() }
+        if (Array.isArray(data)) setRooms(data)
+        else if (data?.rooms) setRooms(data.rooms)
+        else if (data?.content) setRooms(data.content)
         else setRooms([])
-      })
-      .catch((err) => setError(err?.message || 'Failed to load rooms'))
-      .finally(() => setLoading(false))
+      } catch (err) { setError(err?.message || 'Failed to load rooms') }
+      finally { setLoading(false) }
+    }
+    const loadCounts = async () => {
+      try { const r = await api.getActiveRoomsCount(); setActiveCount(r.activeRooms ?? r.count ?? r) } catch {}
+      try { const r = await api.getRoomCategoriesCount(); setCategoriesCount(r) } catch {}
+      try { const r = await api.getTotalParticipantsCount(); setTotalParticipants(r.totalParticipants ?? r.count ?? r) } catch {}
+    }
+    loadRooms()
+    loadCounts()
   }, [])
 
   const handleClose = async (room) => {
@@ -55,15 +75,36 @@ export default function Rooms() {
   const handleMuteUser = async (roomId, userId) => {
     try {
       await api.muteKick(roomId, { userId, action: 'mute' })
-      setActionModal(null)
-    } catch { setActionModal(null) }
+      setActionModal((prev) => prev ? { ...prev, members: prev.members.map((m) => m.id === userId ? { ...m, muted: true } : m) } : prev)
+    } catch {}
+  }
+
+  const handleUnmuteUser = async (roomId, userId) => {
+    try {
+      if (api.unmuteUser) await api.unmuteUser(roomId, userId)
+      else await api.muteKick(roomId, { userId, action: 'unmute' })
+      setActionModal((prev) => prev ? { ...prev, members: prev.members.map((m) => m.id === userId ? { ...m, muted: false } : m) } : prev)
+    } catch {}
   }
 
   const handleKickUser = async (roomId, userId) => {
     try {
       await api.kickUser(roomId, userId)
-      setActionModal(null)
-    } catch { setActionModal(null) }
+      setActionModal((prev) => prev ? { ...prev, members: prev.members.filter((m) => m.id !== userId) } : prev)
+    } catch {}
+  }
+
+  const handleDeactivate = async () => {
+    try { await api.deactivateRoom(deactivateModal.id); setRooms((prev) => prev.map((r) => r.id === deactivateModal.id ? { ...r, status: 'inactive' } : r)) } catch {}
+    setDeactivateModal(null)
+  }
+  const handleDelete = async () => {
+    try { await api.deleteRoom(deleteModal.id); setRooms((prev) => prev.filter((r) => r.id !== deleteModal.id)) } catch {}
+    setDeleteModal(null)
+  }
+  const handleHostChange = async (e) => {
+    e.preventDefault()
+    try { await api.transferHost(hostChangeModal.id, { newHostId }); setRooms((prev) => prev.map((r) => r.id === hostChangeModal.id ? { ...r, host: newHostId } : r)); setHostChangeModal(null); setNewHostId('') } catch {}
   }
 
   const filtered = rooms.filter((r) =>
@@ -79,15 +120,16 @@ export default function Rooms() {
       <div className="stats-grid">
         <div className="stats-card">
           <div className="label">Active Rooms</div>
-          <div className="value">{rooms.filter((r) => r.status === 'active').length}</div>
+          <div className="value">{activeCount ?? rooms.filter((r) => r.status === 'active' || r.status === 'LIVE').length}</div>
         </div>
         <div className="stats-card">
           <div className="label">Total Participants</div>
-          <div className="value">{rooms.reduce((s, r) => s + r.participants, 0)}</div>
+          <div className="value">{totalParticipants ?? rooms.reduce((s, r) => s + (r.participants ?? r.participantCount ?? 0), 0)}</div>
         </div>
         <div className="stats-card">
           <div className="label">Categories</div>
-          <div className="value">{new Set(rooms.map((r) => r.category)).size}</div>
+          <div className="value">{categoriesCount ? Object.keys(categoriesCount).length : new Set(rooms.map((r) => r.category)).size}</div>
+          {categoriesCount && <div className="change" style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>{Object.entries(categoriesCount).map(([k,v])=>`${k}:${v}`).join(' · ')}</div>}
         </div>
       </div>
 
@@ -125,17 +167,22 @@ export default function Rooms() {
                     <td><span className={`badge ${r.status}`}>{r.status}</span></td>
                     <td>{r.created}</td>
                     <td>
-                      <div className="actions">
-                        {r.members && r.members.length > 0 && (
-                          <button className="btn btn-outline btn-sm" onClick={() => handleAction('members', r)} title="View members">
-                            👥 {r.members.length}
-                          </button>
-                        )}
-                        {r.status === 'active' && canMuteKick && (
+                      <div className="actions" style={{ flexWrap: 'wrap' }}>
+                        <button className="btn btn-outline btn-sm" onClick={() => handleAction('members', r)} title="View members">
+                          👥 {r.members?.length ?? r.participants ?? 0}
+                        </button>
+                        {r.status !== 'closed' && r.status !== 'inactive' && canMuteKick && (
                           <button className="btn btn-warning btn-sm" onClick={() => handleAction('mute', r)} title="Mute all">🔇 Mute</button>
                         )}
-                        {r.status === 'active' && canClose && (
+                        {r.status !== 'closed' && r.status !== 'inactive' && canClose && (
                           <button className="btn btn-danger btn-sm" onClick={() => setCloseModal(r)}>Close</button>
+                        )}
+                        {canManage && (
+                          <>
+                            <button className="btn btn-outline btn-sm" onClick={() => setDeactivateModal(r)} title="Deactivate">Deactivate</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => setDeleteModal(r)} title="Delete">Delete</button>
+                            <button className="btn btn-primary btn-sm" onClick={() => setHostChangeModal(r)} title="Change Host">Host ↻</button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -177,7 +224,7 @@ export default function Rooms() {
                       <td>
                         {m.role !== 'host' && canMuteKick && (
                           <div className="actions">
-                            <button className="btn btn-warning btn-sm" onClick={() => handleMuteUser(actionModal.id, m.id)}>Mute</button>
+                            {m.muted ? <button className="btn btn-success btn-sm" onClick={() => handleUnmuteUser(actionModal.id, m.id)}>Unmute</button> : <button className="btn btn-warning btn-sm" onClick={() => handleMuteUser(actionModal.id, m.id)}>Mute</button>}
                             <button className="btn btn-danger btn-sm" onClick={() => handleKickUser(actionModal.id, m.id)}>Kick</button>
                           </div>
                         )}
@@ -204,6 +251,39 @@ export default function Rooms() {
             <button className="btn btn-outline" onClick={() => setActionModal(null)}>Cancel</button>
             <button className="btn btn-warning" onClick={performAction}>Mute All</button>
           </div>
+        </Modal>
+      )}
+
+      {deactivateModal && (
+        <Modal title="Deactivate Room" onClose={() => setDeactivateModal(null)}>
+          <p>Deactivate <strong>{deactivateModal.name}</strong>? It will be hidden but not deleted.</p>
+          <div className="modal-actions">
+            <button className="btn btn-outline" onClick={() => setDeactivateModal(null)}>Cancel</button>
+            <button className="btn btn-warning" onClick={handleDeactivate}>Deactivate</button>
+          </div>
+        </Modal>
+      )}
+      {deleteModal && (
+        <Modal title="Delete Room" onClose={() => setDeleteModal(null)}>
+          <p>Delete <strong>{deleteModal.name}</strong> permanently? This cannot be undone.</p>
+          <div className="modal-actions">
+            <button className="btn btn-outline" onClick={() => setDeleteModal(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick={handleDelete}>Delete</button>
+          </div>
+        </Modal>
+      )}
+      {hostChangeModal && (
+        <Modal title={`Change Host: ${hostChangeModal.name}`} onClose={() => { setHostChangeModal(null); setNewHostId('') }}>
+          <form onSubmit={handleHostChange}>
+            <div className="form-group">
+              <label>New Host ID / Email</label>
+              <input value={newHostId} onChange={(e) => setNewHostId(e.target.value)} placeholder="Enter user ID or email" required />
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-outline" onClick={() => { setHostChangeModal(null); setNewHostId('') }}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Change Host</button>
+            </div>
+          </form>
         </Modal>
       )}
     </div>

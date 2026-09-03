@@ -6,7 +6,7 @@ import { hasPermission, PERMISSIONS } from '../permissions'
 import { api } from '../services/api'
 import Modal from './Modal'
 
-const API_BASE = 'https://vending-helpless-slaw.ngrok-free.dev/api';
+const API_BASE = 'https://impish-earwig-epiphany.ngrok-free.dev/api';
 
 const roleColors = {
   owner: { bg: '#ff6b35', label: 'Owner', defaultRoute: '/' },
@@ -100,7 +100,7 @@ export default function Header() {
     <header className="header">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button className="hamburger" onClick={toggle}>☰</button>
-        <h1>TukTuk Admin Panel</h1>
+        <h1>Tuk Tuk Admin Panel</h1>
         <span className="role-badge" style={{ background: roleInfo.bg }}>{roleInfo.label}</span>
         {user?.country && <span className="role-badge" style={{ background: '#374151' }}>{user.country}</span>}
       </div>

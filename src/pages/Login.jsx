@@ -25,8 +25,8 @@ export default function Login() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <img src="/tuk-tuk_logo.png" style={{ height: 80, margin: '0 auto 12px', display: 'block' }} alt="TukTuk" />
-        <h2>TukTuk Admin</h2>
+        <img src="/tuk-tuk_logo.png" style={{ height: 80, margin: '0 auto 12px', display: 'block' }} alt="Tuk Tuk" />
+        <h2>Tuk Tuk Admin</h2>
         {error && <div className="login-error">{error}</div>}
         <div className="form-group">
           <label>Email</label>

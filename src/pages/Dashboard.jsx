@@ -22,27 +22,32 @@ export default function Dashboard() {
     setLoading(true)
     setError('')
     try {
-        const [statsRes, chartsRes] = await Promise.all([
-          api.getDashboardStats(),
-          api.getDashboardCharts()
+        const [dashboardRes, statsRes, chartsRes] = await Promise.all([
+          api.getDashboard().catch(() => null),
+          api.getDashboardStats().catch(() => null),
+          api.getDashboardCharts().catch(() => null)
         ])
-        if (statsRes) {
-          if (statsRes.stats) {
-            setStats(statsRes.stats)
-          } else if (statsRes.totalUsers !== undefined) {
+        const merged = { ...(dashboardRes || {}), ...(statsRes || {}) }
+        const data = Object.keys(merged).length ? merged : (dashboardRes || statsRes)
+        if (data) {
+          if (data.stats) {
+            setStats(data.stats)
+          } else if (data.totalUsers !== undefined || data.totalRooms !== undefined) {
             setStats([
-              { label: 'Total Users', value: statsRes.totalUsers?.toLocaleString() || '0', change: '+12%', type: 'up' },
-              { label: 'Active Users', value: statsRes.activeUsers?.toLocaleString() || '0', change: '+8%', type: 'up' },
-              { label: 'Total Countries', value: statsRes.totalCountries || '0', change: '0', type: 'neutral' },
-              { label: 'Total Revenue', value: `₹${(statsRes.totalRevenueUsd || 0).toLocaleString()}`, change: '+15%', type: 'up' },
+              { label: 'Total Users', value: data.totalUsers?.toLocaleString() || '0', change: '+12%', type: 'up' },
+              { label: 'Active Users', value: data.activeUsers?.toLocaleString() || '0', change: '+8%', type: 'up' },
+              { label: 'Total Countries', value: data.totalCountries || '0', change: '0', type: 'neutral' },
+              { label: 'Total Revenue', value: `₹${(data.totalRevenueUsd || data.totalRevenue || 0).toLocaleString()}`, change: '+15%', type: 'up' },
             ])
             setRevenue([
-              { label: 'Active Hosts', value: statsRes.activeHosts?.toLocaleString() || '0', change: '+5%', type: 'up' },
-              { label: 'Active Rooms', value: statsRes.activeRooms?.toLocaleString() || '0', change: '+3%', type: 'up' },
-              { label: 'Pending Reports', value: statsRes.pendingReports || '0', change: '-2%', type: 'down' },
+              { label: 'Active Hosts', value: data.activeHosts?.toLocaleString() || '0', change: '+5%', type: 'up' },
+              { label: 'Total Rooms', value: data.totalRooms?.toLocaleString() || '0', change: '', type: 'neutral' },
+              { label: 'Active Rooms', value: (data.activeRooms ?? data.liveRooms ?? 0).toLocaleString(), change: '+3%', type: 'up' },
+              { label: 'Closed Rooms', value: data.closedRooms?.toLocaleString() || '0', change: '', type: 'neutral' },
+              { label: 'Pending Reports', value: data.pendingReports || '0', change: '-2%', type: 'down' },
             ])
           }
-          if (statsRes.revenue) setRevenue(statsRes.revenue)
+          if (data.revenue) setRevenue(data.revenue)
         }
         if (chartsRes?.chartData) setChartData(chartsRes.chartData)
         else if (chartsRes && Array.isArray(chartsRes)) setChartData(chartsRes)

@@ -71,8 +71,8 @@ export default function Sidebar() {
       {open && <div className="sidebar-overlay" onClick={close} />}
       <aside className={`sidebar${open ? ' open' : ''}`}>
         <div className="sidebar-logo">
-          <img src="/tuk-tuk_logo.png" className="sidebar-logo-img" alt="TukTuk" />
-          <span className="logo-text">TukTuk</span>
+          <img src="/tuk-tuk_logo.png" className="sidebar-logo-img" alt="Tuk Tuk" />
+          <span className="logo-text">TUK TUK VOICE CHAT</span>
         </div>
           <div className="sidebar-user">
             {profilePic ? <img src={profilePic} alt="" className="sidebar-avatar-img" /> : <div className="sidebar-avatar" style={{ background: roleColors[user?.role] || 'var(--primary)' }}>{user?.name?.charAt(0) || 'A'}</div>}

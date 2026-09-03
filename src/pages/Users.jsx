@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
-import { hasPermission, PERMISSIONS } from '../permissions'
+import { hasPermission, PERMISSIONS, ROLES } from '../permissions'
 import Modal from '../components/Modal'
 import DataTable from '../components/DataTable'
 import { ErrorState, LoadingState } from '../components/SkeletonLoader'
@@ -65,8 +65,11 @@ export default function Users() {
 
   const handleEdit = async () => {
     try {
-      await api.updateUser(editModal.id, editForm)
-      setUsers((prev) => prev.map((x) => x.id === editModal.id ? { ...x, ...editForm } : x))
+      const payload = { name: editForm.name, email: editForm.email, phone: editForm.phone, country: editForm.country }
+      if (editForm.avatar) payload.avatar = editForm.avatar
+      if (isOwner && editForm.official) payload.role = editForm.official
+      await api.updateUser(editModal.id, payload)
+      setUsers((prev) => prev.map((x) => x.id === editModal.id ? { ...x, ...payload, name: payload.name, email: payload.email } : x))
       setEditModal(null)
       addToast('User updated successfully', 'success')
     } catch {
@@ -85,9 +88,36 @@ export default function Users() {
     }
   }
 
+  const isOwner = user?.role === ROLES.OWNER
+  const officialRoles = [
+    { value: ROLES.SUPER_ADMIN, label: 'Super Admin' },
+    { value: ROLES.MODERATOR, label: 'Moderator' },
+    { value: ROLES.SUPPORT, label: 'Support' },
+    { value: ROLES.COUNTRY_HANDLER, label: 'Country Handler' },
+    { value: ROLES.DIAMOND_STOCK, label: 'Diamond Stock Manager' },
+    { value: ROLES.AGENCY, label: 'Agency' },
+    { value: ROLES.HOST, label: 'Host' },
+  ]
+
   const openEdit = (u) => {
-    setEditForm({ name: u.name, email: u.email, phone: u.phone || '', country: u.country || '' })
+    setEditForm({
+      name: u.name || '',
+      uid: String(u.id || u.uid || ''),
+      avatar: u.avatar || u.profilePic || u.photo || '',
+      email: u.email || '',
+      phone: u.phone || '',
+      country: u.country || '',
+      official: u.role || '',
+    })
     setEditModal(u)
+  }
+
+  const handleAvatarChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => setEditForm((prev) => ({ ...prev, avatar: ev.target.result }))
+    reader.readAsDataURL(file)
   }
 
   const filtered = users.filter((u) =>
@@ -153,22 +183,61 @@ export default function Users() {
       )}
 
       {editModal && (
-        <Modal title={`Edit User: ${editModal.name}`} onClose={() => setEditModal(null)}>
-          <div className="form-group">
-            <label>Name</label>
-            <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
-          </div>
-          <div className="form-group">
-            <label>Email</label>
-            <input value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
-          </div>
-          <div className="form-group">
-            <label>Phone</label>
-            <input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
-          </div>
-          <div className="form-group">
-            <label>Country</label>
-            <input value={editForm.country} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} />
+        <Modal wide title={`Edit User: ${editModal.name}`} onClose={() => setEditModal(null)}>
+          <div style={{ display: 'grid', gap: 14 }}>
+            {/* Profile DP */}
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Profile DP</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ width: 64, height: 64, borderRadius: '50%', overflow: 'hidden', background: 'var(--primary-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '2px solid var(--border)' }}>
+                  {editForm.avatar ? <img src={editForm.avatar} alt="DP" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 22, fontWeight: 700, color: 'var(--primary)' }}>{(editForm.name || 'U').charAt(0).toUpperCase()}</span>}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <input type="file" accept="image/*" onChange={handleAvatarChange} style={{ fontSize: 13 }} />
+                  <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>Upload profile picture</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Name</label>
+                <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Full name" style={{ wordBreak: 'break-word' }} />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>UID</label>
+                <input value={editForm.uid} disabled style={{ background: 'var(--bg)', color: 'var(--text-light)', cursor: 'not-allowed' }} />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Mail ID</label>
+              <input value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} placeholder="user@email.com" style={{ wordBreak: 'break-all' }} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Phone</label>
+                <input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} placeholder="+91 00000 00000" />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Country</label>
+                <input value={editForm.country} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} placeholder="Country" />
+              </div>
+            </div>
+
+            {isOwner && (
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Official (Role)</label>
+                <select value={editForm.official} onChange={(e) => setEditForm({ ...editForm, official: e.target.value })} style={{ width: '100%', padding: '10px 14px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontSize: 14, background: 'rgba(255,255,255,0.9)', outline: 'none' }}>
+                  <option value="">Select role</option>
+                  {officialRoles.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+                <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>Only owner can change official role</div>
+              </div>
+            )}
           </div>
           <div className="modal-actions">
             <button className="btn btn-outline" onClick={() => setEditModal(null)}>Cancel</button>

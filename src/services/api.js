@@ -1,4 +1,4 @@
-const API_BASE = 'https://vending-helpless-slaw.ngrok-free.dev/api';
+const API_BASE = 'https://impish-earwig-epiphany.ngrok-free.dev/api';
 
 function toQuery(obj) {
   if (typeof obj === 'string') return obj;
@@ -26,6 +26,7 @@ export const api = {
   changePassword: (email, currentPassword, newPassword) => request('/auth/platform-owner/change-password', { method: 'POST', body: JSON.stringify({ email, currentPassword, newPassword }) }),
 
   // Dashboard
+  getDashboard: () => request('/dashboard'),
   getDashboardStats: () => request('/dashboard/stats'),
   getDashboardCharts: () => request('/dashboard/charts'),
 
@@ -37,6 +38,10 @@ export const api = {
   getOwnerCountrySupport: (code, page = 0, size = 20) => request(`/platform-owner/countries/${code}/support?page=${page}&size=${size}`),
   getOwnerCountryRooms: (code) => request(`/platform-owner/countries/${code}/rooms`),
   closeOwnerCountryRoom: (code, roomId) => request(`/platform-owner/countries/${code}/rooms/${roomId}/close`, { method: 'POST' }),
+  getPlatformOwnerRooms: () => request('/platform-owner/rooms'),
+  getActiveRoomsCount: () => request('/platform-owner/rooms/active/count'),
+  getRoomCategoriesCount: () => request('/platform-owner/rooms/categories/count'),
+  getTotalParticipantsCount: () => request('/platform-owner/rooms/participants/count'),
   listAdmins: () => request('/platform-owner/admins'),
   getAssignableRoles: () => request('/platform-owner/admins/roles'),
   addAdmin: (data) => request('/platform-owner/admins', { method: 'POST', body: JSON.stringify(data) }),
@@ -62,6 +67,10 @@ export const api = {
   muteAllRoom: (id) => request(`/rooms/${id}/mute-all`, { method: 'POST' }),
   kickUser: (roomId, userId) => request(`/rooms/${roomId}/kick/${userId}`, { method: 'POST' }),
   muteKick: (roomId, data) => request(`/rooms/${roomId}/mute-kick`, { method: 'POST', body: JSON.stringify(data) }),
+  deactivateRoom: (id) => request(`/rooms/${id}/deactivate`, { method: 'POST' }),
+  deleteRoom: (id) => request(`/rooms/${id}`, { method: 'DELETE' }),
+  transferHost: (id, data) => request(`/rooms/${id}/transfer-host`, { method: 'POST', body: JSON.stringify(data) }),
+  unmuteUser: (roomId, userId) => request(`/rooms/${roomId}/unmute/${userId}`, { method: 'POST' }),
   getVoiceLogs: () => request('/rooms/voice-logs'),
 
   // Diamond Allocation

@@ -8,6 +8,7 @@ export default function Notifications() {
   const [title, setTitle] = useState('')
   const [message, setMessage] = useState('')
   const [audience, setAudience] = useState('all')
+  const [specificUserId, setSpecificUserId] = useState('')
   const [schedule, setSchedule] = useState('')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
@@ -43,9 +44,18 @@ export default function Notifications() {
     setSending(true)
     setSendError(null)
     try {
+      if (type === 'notification' && audience === 'specific' && !specificUserId.trim()) {
+        throw new Error('Please enter User ID for specific user')
+      }
       const payload = { title, message, audience }
-      if (schedule) payload.schedule = schedule
-      if (type === 'notification') {
+      if (type === 'notification' && audience === 'specific') {
+        payload.userId = specificUserId.trim()
+      } else if (schedule) {
+        payload.schedule = schedule
+      }
+      if (type === 'notification' && audience === 'specific') {
+        await api.sendNotification({ ...payload, type, userId: payload.userId })
+      } else if (type === 'notification') {
         await api.sendNotification({ ...payload, type })
       } else {
         await api.sendMassNotification(payload)
@@ -120,12 +130,20 @@ export default function Notifications() {
                   <option value="vip">VIP Users</option>
                   <option value="inactive">Inactive Users</option>
                   <option value="banned">Banned Users</option>
+                  {type === 'notification' && <option value="specific">Specific User (ID)</option>}
                 </select>
               </div>
-              <div className="form-group">
-                <label>Schedule (optional)</label>
-                <input type="datetime-local" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
-              </div>
+              {type === 'notification' && audience === 'specific' ? (
+                <div className="form-group">
+                  <label>User ID</label>
+                  <input value={specificUserId} onChange={(e) => setSpecificUserId(e.target.value)} placeholder="Enter user ID e.g. 100346" required />
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label>Schedule (optional)</label>
+                  <input type="datetime-local" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
+                </div>
+              )}
             </div>
             <div style={{ marginTop: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
               <button type="submit" className="btn btn-primary" disabled={sending}>
