@@ -52,6 +52,7 @@ export default function Admins() {
   const [form, setForm] = useState({ name: '', email: '', password: '', role: ROLES.SUPER_ADMIN, country: '' })
   const [formErrors, setFormErrors] = useState({})
   const [admins, setAdmins] = useState([])
+  const [decoMap, setDecoMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -60,17 +61,34 @@ export default function Admins() {
     async function load() {
       setLoading(true)
       setError(null)
+      let list = []
       try {
         const data = await api.getAdmins()
-        if (!cancelled) setAdmins(Array.isArray(data) ? data : data.admins || data.content || [])
+        list = Array.isArray(data) ? data : data.admins || data.content || []
+        if (!cancelled) setAdmins(list)
       } catch {
         try {
           const data = await api.listAdmins()
-          if (!cancelled) setAdmins(Array.isArray(data) ? data : data.admins || [])
+          list = Array.isArray(data) ? data : data.admins || []
+          if (!cancelled) setAdmins(list)
         } catch (err) {
           if (!cancelled) setError(err.message)
         }
       }
+      try {
+        const entries = await Promise.all((list || []).map(async (a) => {
+          try {
+            const d = await api.getAdminDecorations(a.id)
+            if (d?.badgeUrl || d?.frameUrl || d?.badge || d?.frame) return [a.id, d]
+          } catch {}
+          return null
+        }))
+        if (!cancelled) {
+          const map = {}
+          entries.forEach((e) => { if (e) map[e[0]] = e[1] })
+          setDecoMap(map)
+        }
+      } catch {}
       if (!cancelled) setLoading(false)
     }
     load()
@@ -171,6 +189,7 @@ export default function Admins() {
                     <th>Name</th>
                     <th>Email</th>
                     <th>Role</th>
+                    <th>Badge / Frame</th>
                     <th>Country</th>
                     <th>Permissions</th>
                     <th>Actions</th>
@@ -186,6 +205,13 @@ export default function Admins() {
                     </td>
                     <td>{a.email}</td>
                     <td><span className="role-badge" style={{ background: roleColors[a.role] || '#6b7280' }}>{roleLabels[a.role] || a.role}</span></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {decoMap[a.id]?.badgeUrl ? <img src={decoMap[a.id].badgeUrl} alt={decoMap[a.id].badge || 'badge'} title={decoMap[a.id].badge || 'Badge'} style={{ width: 28, height: 28, objectFit: 'contain' }} /> : (decoMap[a.id]?.badge || '')}
+                        {decoMap[a.id]?.frameUrl ? <img src={decoMap[a.id].frameUrl} alt={decoMap[a.id].frame || 'frame'} title={decoMap[a.id].frame || 'Frame'} style={{ width: 28, height: 28, objectFit: 'contain' }} /> : (decoMap[a.id]?.frame || '')}
+                        {!decoMap[a.id] && <span style={{ color: 'var(--text-light)' }}>—</span>}
+                      </div>
+                    </td>
                     <td>{a.country || '-'}</td>
                     <td className="cell-perms">
                       {a.role === ROLES.OWNER ? 'All permissions (owner)' : a.role === ROLES.SUPER_ADMIN ? 'All permissions except owner-only' : a.role === ROLES.MODERATOR ? 'Users, Rooms, Reports, Notifications' : a.role === ROLES.SUPPORT ? 'View users, reports, notifications' : 'Role-specific permissions'}

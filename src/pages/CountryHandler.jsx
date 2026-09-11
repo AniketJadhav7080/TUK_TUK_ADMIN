@@ -4,15 +4,19 @@ import { api } from '../services/api'
 import Loading from '../components/Loading'
 
 const mapCountryStats = (c) => ({
-  country: c.country || c.name || c.code || 'Unknown',
-  flag: c.flag || '🌍',
-  users: c.users ?? c.totalUsers ?? 0,
+  countryCode: c.countryCode || c.code || c.country || 'Unknown',
+  country: c.countryName || c.country || c.name || c.code || 'Unknown',
+  flag: c.flagEmoji || c.flag || '🌍',
+  users: c.usersCount ?? c.users ?? c.totalUsers ?? 0,
   activeUsers: c.activeUsers ?? c.active_users ?? 0,
-  hosts: c.hosts ?? c.activeHosts ?? 0,
-  rooms: c.rooms ?? c.activeRooms ?? 0,
-  revenue: c.revenue ? `₹${Number(c.revenue).toLocaleString()}` : '₹0',
-  reports: c.reports ?? c.pendingReports ?? 0,
-  status: c.status || 'active',
+  hosts: c.hostsCount ?? c.hosts ?? c.activeHosts ?? 0,
+  rooms: c.roomsCount ?? c.rooms ?? c.totalRooms ?? 0,
+  activeRooms: c.activeRooms ?? 0,
+  closedRooms: c.closedRooms ?? 0,
+  revenue: (c.revenueUsd ?? c.revenue) != null ? `₹${Number(c.revenueUsd ?? c.revenue).toLocaleString()}` : '₹0',
+  revenueRaw: c.revenueUsd ?? 0,
+  reports: c.reportsCount ?? c.reports ?? c.pendingReports ?? 0,
+  status: c.active === false ? 'inactive' : c.active === true ? 'active' : (c.status || 'active'),
 })
 
 export default function CountryHandler() {
@@ -60,8 +64,9 @@ export default function CountryHandler() {
     setRevenue(null)
     try {
       setDetailLoading(true)
-      const detail = await api.getCountryStats(c.country)
-      if (detail) {
+      const code = c.countryCode || c.country
+      const detail = await api.getCountryStats(code)
+      if (detail && !Array.isArray(detail)) {
         setSelectedCountry({ ...c, ...mapCountryStats(detail) })
       }
     } catch (err) {
@@ -73,20 +78,22 @@ export default function CountryHandler() {
 
   const fetchDetailData = async (tab) => {
     if (!selectedCountry) return
+    const code = selectedCountry.countryCode || selectedCountry.country
     setDetailTab(tab)
     setDetailLoading(true)
     try {
       if (tab === 'hosts') {
-        const data = await api.getCountryHosts(selectedCountry.country, { status: '', page: 0, size: 20 })
+        const data = await api.getCountryHosts(code, { status: '', page: 0, size: 20 })
         setHosts(data.content || data.data || data || [])
       } else if (tab === 'rooms') {
-        const data = await api.getCountryRooms(selectedCountry.country)
-        setRooms(data.content || data.data || data || [])
+        const data = await api.getCountryRooms(code)
+        const list = data.content || data.data || (Array.isArray(data) ? data : data.rooms || [])
+        setRooms(Array.isArray(list) ? list : [])
       } else if (tab === 'support') {
-        const data = await api.getCountrySupport(selectedCountry.country)
-        setSupport(data.content || data.data || data || [])
+        const data = await api.getCountrySupport(code)
+        setSupport(data.content || data.data || (Array.isArray(data) ? data : data.reports || []))
       } else if (tab === 'revenue') {
-        const data = await api.getCountryRevenue(selectedCountry.country)
+        const data = await api.getCountryRevenue(code)
         setRevenue(data)
       }
     } catch (err) {
@@ -96,7 +103,7 @@ export default function CountryHandler() {
     }
   }
 
-  const filtered = countries.filter((c) => c.country.toLowerCase().includes(search.toLowerCase()))
+  const filtered = countries.filter((c) => c.country.toLowerCase().includes(search.toLowerCase()) || (c.countryCode || '').toLowerCase().includes(search.toLowerCase()))
 
   if (loading) return <Loading text="Loading country data..." />
   return (
@@ -106,7 +113,7 @@ export default function CountryHandler() {
         <div className="stats-card"><div className="label">Total Countries</div><div className="value">{countries.length}</div></div>
         <div className="stats-card"><div className="label">Total Users</div><div className="value">{countries.reduce((s, c) => s + c.users, 0).toLocaleString()}</div></div>
         <div className="stats-card"><div className="label">Active Users</div><div className="value">{countries.reduce((s, c) => s + c.activeUsers, 0).toLocaleString()}</div></div>
-        <div className="stats-card"><div className="label">Total Revenue</div><div className="value">{countries.reduce((s, c) => s + parseInt(c.revenue.replace(/[$₹]/g, '').replace(',', '')), 0).toLocaleString()}</div></div>
+        <div className="stats-card"><div className="label">Total Revenue</div><div className="value">₹{countries.reduce((s, c) => s + (c.revenueRaw || 0), 0).toLocaleString()}</div></div>
       </div>
 
       <div className="card">
@@ -122,12 +129,12 @@ export default function CountryHandler() {
               </thead>
               <tbody>
                 {filtered.map((c) => (
-                  <tr key={c.country}>
-                    <td style={{ fontWeight: 500 }}>{c.flag} {c.country}</td>
+                  <tr key={c.countryCode || c.country}>
+                    <td style={{ fontWeight: 500 }}>{c.flag} {c.country} <span style={{ fontSize: 11, color: 'var(--text-light)', marginLeft: 4 }}>{c.countryCode !== 'Unknown' ? c.countryCode : ''}</span></td>
                     <td>{c.users.toLocaleString()}</td>
                     <td>{c.activeUsers.toLocaleString()}</td>
                     <td>{c.hosts}</td>
-                    <td>{c.rooms}</td>
+                    <td>{c.rooms} <span style={{ fontSize: 11, color: 'var(--text-light)' }}>{c.activeRooms ? `(${c.activeRooms} live)` : ''}</span></td>
                     <td style={{ fontWeight: 600 }}>{c.revenue}</td>
                     <td>{c.reports}</td>
                     <td><span className={`badge ${c.status}`}>{c.status}</span></td>

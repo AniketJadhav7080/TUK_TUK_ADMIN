@@ -9,6 +9,7 @@ export default function Notifications() {
   const [message, setMessage] = useState('')
   const [audience, setAudience] = useState('all')
   const [specificUserId, setSpecificUserId] = useState('')
+  const [image, setImage] = useState(null)
   const [schedule, setSchedule] = useState('')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
@@ -39,6 +40,9 @@ export default function Notifications() {
     return () => { cancelled = true }
   }, [])
 
+  const typeMap = { notification: 'ADMIN_BROADCAST', announcement: 'ADMIN_ANNOUNCEMENT', promo: 'ADMIN_PROMOTIONAL' }
+  const recipientMap = { all: 'ALL_USERS', active: 'ACTIVE_USERS', vip: 'VIP_USERS', inactive: 'INACTIVE_USERS', banned: 'BANNED_USERS', specific: 'SELECTED_USERS' }
+
   const handleSend = async (e) => {
     e.preventDefault()
     setSending(true)
@@ -47,22 +51,22 @@ export default function Notifications() {
       if (type === 'notification' && audience === 'specific' && !specificUserId.trim()) {
         throw new Error('Please enter User ID for specific user')
       }
-      const payload = { title, message, audience }
-      if (type === 'notification' && audience === 'specific') {
-        payload.userId = specificUserId.trim()
-      } else if (schedule) {
-        payload.schedule = schedule
-      }
-      if (type === 'notification' && audience === 'specific') {
-        await api.sendNotification({ ...payload, type, userId: payload.userId })
+      const recipient = recipientMap[audience] || 'ALL_USERS'
+      const apiType = typeMap[type] || 'ADMIN_BROADCAST'
+      const payload = { title, body: message, recipient, type: apiType }
+      if (recipient === 'SELECTED_USERS') payload.userIds = [specificUserId.trim()]
+      else if (schedule) payload.schedule = schedule
+      if (recipient === 'SELECTED_USERS') {
+        await api.sendNotification({ ...payload, image })
       } else if (type === 'notification') {
-        await api.sendNotification({ ...payload, type })
+        await api.sendMassNotification(payload, image)
       } else {
-        await api.sendMassNotification(payload)
+        await api.sendMassNotification(payload, image)
       }
       setSent(true)
       setTitle('')
       setMessage('')
+      setImage(null)
       setSchedule('')
       setHistory((prev) => [
         {
@@ -120,6 +124,11 @@ export default function Notifications() {
                 required
                 style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, minHeight: 100, resize: 'vertical', fontFamily: 'inherit' }}
               />
+            </div>
+            <div className="form-group">
+              <label>Image (optional)</label>
+              <input type="file" accept="image/*" onChange={(e) => setImage(e.target.files?.[0] || null)} />
+              {image && <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4 }}>{image.name}</div>}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div className="form-group">

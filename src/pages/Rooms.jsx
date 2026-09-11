@@ -33,7 +33,9 @@ export default function Rooms() {
     const loadRooms = async () => {
       try {
         let data = null
-        try { data = await api.getPlatformOwnerRooms() } catch { data = await api.getLiveRooms() }
+        try { data = await api.getAdminRooms() } catch {}
+        if (!data) try { data = await api.getPlatformOwnerRooms() } catch {}
+        if (!data) try { data = await api.getLiveRooms() } catch {}
         if (Array.isArray(data)) setRooms(data)
         else if (data?.rooms) setRooms(data.rooms)
         else if (data?.content) setRooms(data.content)
@@ -95,21 +97,39 @@ export default function Rooms() {
   }
 
   const handleDeactivate = async () => {
-    try { await api.deactivateRoom(deactivateModal.id); setRooms((prev) => prev.map((r) => r.id === deactivateModal.id ? { ...r, status: 'inactive' } : r)) } catch {}
+    try {
+      const room = deactivateModal
+      const code = room.countryCode || room.country || 'IN'
+      if (api.deactivateCountryRoom) await api.deactivateCountryRoom(code, room.id, false).catch(() => api.deactivateRoom(room.id))
+      else await api.deactivateRoom(room.id)
+      setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, status: 'inactive' } : r))
+    } catch {}
     setDeactivateModal(null)
   }
   const handleDelete = async () => {
-    try { await api.deleteRoom(deleteModal.id); setRooms((prev) => prev.filter((r) => r.id !== deleteModal.id)) } catch {}
+    try {
+      const room = deleteModal
+      const code = room.countryCode || room.country || 'IN'
+      if (api.deleteCountryRoom) await api.deleteCountryRoom(code, room.id).catch(() => api.deleteRoom(room.id))
+      else await api.deleteRoom(room.id)
+      setRooms((prev) => prev.filter((r) => r.id !== room.id))
+    } catch {}
     setDeleteModal(null)
   }
   const handleHostChange = async (e) => {
     e.preventDefault()
-    try { await api.transferHost(hostChangeModal.id, { newHostId }); setRooms((prev) => prev.map((r) => r.id === hostChangeModal.id ? { ...r, host: newHostId } : r)); setHostChangeModal(null); setNewHostId('') } catch {}
+    try {
+      const room = hostChangeModal
+      const code = room.countryCode || room.country || 'IN'
+      if (api.transferCountryHost) await api.transferCountryHost(code, room.id, { hostId: newHostId, newHostId }).catch(() => api.transferHost(room.id, { newHostId }))
+      else await api.transferHost(room.id, { newHostId })
+      setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, host: newHostId, hostId: newHostId } : r)); setHostChangeModal(null); setNewHostId('')
+    } catch {}
   }
 
   const filtered = rooms.filter((r) =>
-    (r.name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (r.host || '').toLowerCase().includes(search.toLowerCase())
+    (r.roomName || r.name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (r.host || r.hostId || '').toLowerCase().includes(search.toLowerCase())
   )
 
   if (loading) return <Loading />
@@ -144,9 +164,11 @@ export default function Rooms() {
               <thead>
                 <tr>
                   <th>Room Name</th>
+                  <th>Room ID</th>
                   <th>Host</th>
                   <th>Participants</th>
                   <th>Category</th>
+                  <th>Country</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th>Actions</th>
@@ -154,18 +176,20 @@ export default function Rooms() {
               </thead>
               <tbody>
                 {filtered.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ fontWeight: 500 }}>{r.name}</td>
-                    <td>{r.host}</td>
+                  <tr key={r.id || r.roomName}>
+                    <td style={{ fontWeight: 500 }}>{r.roomName || r.name}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-light)', wordBreak: 'break-all', maxWidth: 160 }}>{r.id || r.roomId || '-'}</td>
+                    <td>{r.host || r.hostId || '-'}</td>
                     <td>
-                      {r.participants}
-                      {r.status === 'active' && (
+                      {r.viewerCount ?? r.participants ?? 0}
+                      {(r.status === 'active' || r.status === 'LIVE') && (
                         <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#27ae60', marginLeft: 6 }} title="Live" />
                       )}
                     </td>
                     <td>{r.category}</td>
-                    <td><span className={`badge ${r.status}`}>{r.status}</span></td>
-                    <td>{r.created}</td>
+                    <td>{r.countryCode || r.country || '-'}</td>
+                    <td><span className={`badge ${r.status === 'LIVE' ? 'active' : r.status}`}>{r.status}</span></td>
+                    <td>{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : r.created || '-'}</td>
                     <td>
                       <div className="actions" style={{ flexWrap: 'wrap' }}>
                         <button className="btn btn-outline btn-sm" onClick={() => handleAction('members', r)} title="View members">
@@ -180,7 +204,6 @@ export default function Rooms() {
                         {canManage && (
                           <>
                             <button className="btn btn-outline btn-sm" onClick={() => setDeactivateModal(r)} title="Deactivate">Deactivate</button>
-                            <button className="btn btn-danger btn-sm" onClick={() => setDeleteModal(r)} title="Delete">Delete</button>
                             <button className="btn btn-primary btn-sm" onClick={() => setHostChangeModal(r)} title="Change Host">Host ↻</button>
                           </>
                         )}

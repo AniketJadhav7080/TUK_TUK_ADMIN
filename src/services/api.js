@@ -8,11 +8,15 @@ function toQuery(obj) {
 
 async function request(endpoint, options = {}) {
   const token = sessionStorage.getItem('admin_token');
-  const headers = { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true', ...options.headers };
+  const isFormData = options.body instanceof FormData
+  const headers = { 'ngrok-skip-browser-warning': 'true', ...options.headers };
+  if (!isFormData) headers['Content-Type'] = 'application/json'
+  else delete headers['Content-Type']
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
+  const { skipRedirect, ...fetchOptions } = options;
+  const res = await fetch(`${API_BASE}${endpoint}`, { ...fetchOptions, headers });
   if (!res.ok) {
-    if (res.status === 401) { sessionStorage.removeItem('admin_token'); window.location.href = '/login'; }
+    if (res.status === 401 && !skipRedirect) { sessionStorage.removeItem('admin_token'); window.location.href = '/login'; }
     const err = await res.json().catch(() => ({ message: res.statusText }));
     throw new Error(err.message || err.error || 'Request failed');
   }
@@ -60,16 +64,24 @@ export const api = {
   approveHost: (id) => request(`/hosts/approve/${id}`, { method: 'POST' }),
   updateHostApproval: (id, data) => request(`/hosts/${id}/approve`, { method: 'PATCH', body: JSON.stringify(data) }),
 
-  // Rooms
+  // Rooms (Nikita admin)
+  getAdminRooms: () => request('/admin/rooms'),
+  getRooms: () => request('/rooms'),
   getLiveRooms: () => request('/rooms/live'),
   getActiveRooms: () => request('/rooms/active'),
-  closeRoom: (id) => request(`/rooms/${id}/close`, { method: 'POST' }),
+  getCountryRoomsByCode: (code) => request(`/country/${code}/rooms`),
+  closeRoom: (id) => request(`/admin/rooms/${id}/close`, { method: 'POST', body: JSON.stringify({ reason: 'Policy violation' }) }),
+  closeAdminRoom: (id, reason = 'Policy violation') => request(`/admin/rooms/${id}/close`, { method: 'POST', body: JSON.stringify({ reason }) }),
   muteAllRoom: (id) => request(`/rooms/${id}/mute-all`, { method: 'POST' }),
   kickUser: (roomId, userId) => request(`/rooms/${roomId}/kick/${userId}`, { method: 'POST' }),
   muteKick: (roomId, data) => request(`/rooms/${roomId}/mute-kick`, { method: 'POST', body: JSON.stringify(data) }),
-  deactivateRoom: (id) => request(`/rooms/${id}/deactivate`, { method: 'POST' }),
-  deleteRoom: (id) => request(`/rooms/${id}`, { method: 'DELETE' }),
-  transferHost: (id, data) => request(`/rooms/${id}/transfer-host`, { method: 'POST', body: JSON.stringify(data) }),
+  deactivateRoom: (id) => request(`/admin/rooms/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active: false }) }),
+  activateRoom: (id) => request(`/admin/rooms/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active: true }) }),
+  deactivateCountryRoom: (countryCode, roomId, active = false) => request(`/admin/rooms/${roomId}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
+  deleteRoom: (id) => request(`/admin/rooms/${id}`, { method: 'DELETE' }),
+  deleteCountryRoom: (countryCode, roomId) => request(`/admin/rooms/${roomId}`, { method: 'DELETE' }),
+  transferHost: (id, data) => request(`/admin/rooms/${id}/host`, { method: 'PATCH', body: JSON.stringify({ hostId: data.newHostId || data.hostId }) }),
+  transferCountryHost: (countryCode, roomId, data) => request(`/admin/rooms/${roomId}/host`, { method: 'PATCH', body: JSON.stringify({ hostId: data.newHostId || data.hostId }) }),
   unmuteUser: (roomId, userId) => request(`/rooms/${roomId}/unmute/${userId}`, { method: 'POST' }),
   getVoiceLogs: () => request('/rooms/voice-logs'),
 
@@ -104,19 +116,48 @@ export const api = {
 
   // Agency
   getAgencies: () => request('/agencies'),
+  getCommissions: () => request('/agencies/commissions'),
+  getSalaries: () => request('/agencies/salaries'),
+  getAgencyPerformance: () => request('/agencies/performance'),
   recruitHost: (data) => request('/agencies/recruit', { method: 'POST', body: JSON.stringify(data) }),
+
+  // Host Panel
+  withdrawHost: (data) => request('/host/withdraw', { method: 'POST', body: JSON.stringify(data) }),
 
   // Security
   getSecurityAlerts: () => request('/security/alerts'),
   getFraudAlerts: () => request('/security/fraud-alerts'),
   blockIp: (data) => request('/security/block-ip', { method: 'POST', body: JSON.stringify(data) }),
 
-  // Events
-  getEvents: () => request('/events'),
-  createEvent: (data) => request('/events', { method: 'POST', body: JSON.stringify(data) }),
+  // Events (Nikita admin)
+  getEvents: () => request('/admin/events'),
+  createEvent: (data, imageFile) => {
+    const fd = new FormData()
+    const payload = { name: data.name, description: data.description, startDate: data.startDate, endDate: data.endDate, rewards: Number(data.rewards ?? data.reward ?? 0), hostName: data.hostName, eventType: data.eventType || data.type, countryCode: data.countryCode || 'IN' }
+    fd.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+    if (imageFile) fd.append('image', imageFile)
+    return request('/admin/events', { method: 'POST', body: fd, headers: {} })
+  },
+  updateEvent: (id, data) => request(`/admin/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteEvent: (id) => request(`/admin/events/${id}`, { method: 'DELETE' }),
+  notifyEvent: (id) => request(`/admin/events/notify/${id}`),
 
   // Notifications
   getNotificationHistory: () => request('/notifications/history'),
+  sendNotification: (data) => {
+    const fd = new FormData()
+    if (data.image) { fd.append('image', data.image); delete data.image }
+    fd.append('request', new Blob([JSON.stringify(data)], { type: 'application/json' }))
+    return request('/notifications/mass', { method: 'POST', body: fd, headers: {} })
+  },
+  sendMassNotification: (data, image) => {
+    const fd = new FormData()
+    const payload = { title: data.title, body: data.message || data.body, recipient: data.recipient || 'ALL_USERS', type: data.type }
+    if (image) fd.append('image', image)
+    else if (data.image) fd.append('image', data.image)
+    fd.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+    return request('/notifications/mass', { method: 'POST', body: fd, headers: {} })
+  },
 
   // Payments
   getPaymentGateways: () => request('/payments/gateways'),
@@ -140,6 +181,16 @@ export const api = {
   getSettings: () => request('/settings'),
   updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) }),
   getCountries: () => request('/countries'),
+
+  // Decorations (badges/frames)
+  getAdminDecorations: (adminId) => request(`/admin/decorations/${adminId}`, { skipRedirect: true }),
+  getDecorationCounts: () => request('/admin/decorations/counts'),
+  getBadgesCount: () => request('/admin/decorations/badges/count', { skipRedirect: true }),
+  getFramesCount: () => request('/admin/decorations/frames/count', { skipRedirect: true }),
+  giveAdminBadge: (adminId, badgeName) => request(`/admin/decorations/${adminId}/badge?badgeName=${encodeURIComponent(badgeName)}`, { method: 'POST', skipRedirect: true }),
+  removeAdminBadge: (adminId) => request(`/admin/decorations/${adminId}/badge`, { method: 'DELETE', skipRedirect: true }),
+  giveAdminFrame: (adminId, frameName) => request(`/admin/decorations/${adminId}/frame?frameName=${encodeURIComponent(frameName)}`, { method: 'POST', skipRedirect: true }),
+  removeAdminFrame: (adminId) => request(`/admin/decorations/${adminId}/frame`, { method: 'DELETE', skipRedirect: true }),
 
   // Gamification
   getGamificationItems: () => request('/gamification/items'),
@@ -194,6 +245,9 @@ export const api = {
   resolveAiFlag: (id, data) => request(`/ai-moderation/flags/${id}/resolve`, { method: 'POST', body: JSON.stringify(data) }),
 
   // VIP Plans
+  getVipInfo: () => request('/app/vip/vip-info'),
+  getVipConfig: () => request('/app/vip/config'),
+  updateVipConfig: (data) => request('/app/vip/config', { method: 'PUT', body: JSON.stringify(data) }),
   getVipPlans: () => request('/vip/plans'),
   createVipPlan: (data) => request('/vip/plans', { method: 'POST', body: JSON.stringify(data) }),
   updateVipPlan: (id, data) => request(`/vip/plans/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
@@ -209,7 +263,7 @@ export const api = {
   deleteMission: (id) => request(`/missions/${id}`, { method: 'DELETE' }),
 
   // Achievement Badges
-  getBadges: () => request('/badges'),
+  getBadges: () => request('/badges', { skipRedirect: true }),
   createBadge: (data) => request('/badges', { method: 'POST', body: JSON.stringify(data) }),
   updateBadge: (id, data) => request(`/badges/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBadge: (id) => request(`/badges/${id}`, { method: 'DELETE' }),
