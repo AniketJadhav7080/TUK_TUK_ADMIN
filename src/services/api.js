@@ -27,12 +27,15 @@ async function request(endpoint, options = {}) {
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const { skipRedirect, ...fetchOptions } = options;
   const res = await fetch(`${API_BASE}${endpoint}`, { ...fetchOptions, headers });
+  // Some endpoints return 200 with an empty body on success — don't treat that as failure
+  const text = await res.text()
+  let data
+  try { data = text ? JSON.parse(text) : null } catch { data = null }
   if (!res.ok) {
     if (res.status === 401 && !skipRedirect) { sessionStorage.removeItem('admin_token'); window.location.href = '/login'; }
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(err.message || err.error || 'Request failed');
+    throw new Error(data?.message || data?.error || res.statusText || 'Request failed');
   }
-  return res.json();
+  return data;
 }
 
 export const api = {
@@ -126,18 +129,13 @@ export const api = {
   activateRoom: (id) => request(`/admin/rooms/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active: true }) }),
   deactivateCountryRoom: (countryCode, roomId, active = false) => request(`/admin/rooms/${roomId}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
   deleteRoom: (id) => request(`/admin/rooms/${id}`, { method: 'DELETE' }),
-  // Room rename + DP (new contract): PATCH /admin/rooms/{id}/update
-  // multipart {roomName, image(file)}. Falls back to legacy PUT JSON.
-  updateRoom: async (id, data) => {
+  // Room rename + DP: PATCH /admin/rooms/{id}/update multipart {roomName, image(file)}.
+  updateRoom: (id, data) => {
     const fd = new FormData()
     if (data.roomName !== undefined) fd.append('roomName', data.roomName ?? '')
     if (data.imageFile instanceof File) fd.append('image', data.imageFile)
     else if (data.imageUrl && (data.imageUrl.startsWith('http') || data.imageUrl.startsWith('/'))) fd.append('imageUrl', data.imageUrl)
-    try {
-      return await request(`/admin/rooms/${id}/update`, { method: 'PATCH', body: fd })
-    } catch {
-      return request(`/admin/rooms/${id}`, { method: 'PUT', body: JSON.stringify({ roomName: data.roomName, imageUrl: data.imageUrl }) })
-    }
+    return request(`/admin/rooms/${id}/update`, { method: 'PATCH', body: fd })
   },
   deleteCountryRoom: (countryCode, roomId) => request(`/admin/rooms/${roomId}`, { method: 'DELETE' }),
   transferHost: (id, data) => request(`/admin/rooms/${id}/host`, { method: 'PATCH', body: JSON.stringify({ hostId: data.newHostId || data.hostId }) }),

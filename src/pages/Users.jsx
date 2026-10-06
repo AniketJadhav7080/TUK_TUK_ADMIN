@@ -76,7 +76,7 @@ export default function Users() {
       const payload = { name: editForm.name, email: editForm.email, phoneNumber: editForm.phoneNumber, countryCode: editForm.countryCode, countryName: editForm.countryName }
       if (editForm.avatarFile) payload.avatarFile = editForm.avatarFile
       else if (editForm.avatar) payload.avatar = editForm.avatar
-      if (isOwner && editForm.official) payload.official = editForm.official
+      if (isOwner && editForm.official && officialRoles.some((r) => r.value === editForm.official)) payload.official = editForm.official
       await api.updateUser(editModal.id, payload)
       const localPayload = { ...payload }
       delete localPayload.avatarFile
@@ -120,7 +120,9 @@ export default function Users() {
       phoneNumber: u.phoneNumber || u.phone || '',
       countryCode: u.countryCode || '',
       countryName: u.countryName || u.country || '',
-      official: u.role || '',
+      // Never prefill: app roles (ROLE_USER etc.) are not valid official roles.
+      // Blank = skipped, backend keeps existing value.
+      official: '',
     })
     setEditModal(u)
   }

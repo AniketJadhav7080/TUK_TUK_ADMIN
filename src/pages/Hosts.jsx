@@ -16,64 +16,17 @@ export default function Hosts() {
 
   const canApprove = hasPermission(user, PERMISSIONS.APPROVE_HOSTS)
 
+  // Hosts come ONLY from the hosts API (/hosts records with stats fields).
+  // No rooms/users derivation — backend fills the table (room-create auto-insert).
   const fetchHosts = async () => {
     setLoading(true)
     setError('')
     try {
-      const [hostRes, roomsRes, usersRes] = await Promise.all([
-        api.getHosts({ status: '', search: '', page: 0, size: 100 }).catch(() => null),
-        api.getLiveRooms().catch(() => api.getAdminRooms().catch(() => [])),
-        api.getUsers('?page=0&size=1000').catch(() => null),
-      ])
-      const registered = Array.isArray(hostRes)
+      const hostRes = await api.getHosts({ status: '', search: '', page: 0, size: 100 }).catch(() => null)
+      const list = Array.isArray(hostRes)
         ? hostRes
         : (hostRes?.content || hostRes?.hosts || hostRes?.data || [])
-      const rooms = Array.isArray(roomsRes) ? roomsRes : (roomsRes?.content || roomsRes?.rooms || [])
-      const usersPage = usersRes
-      let allUsers = []
-      if (Array.isArray(usersPage)) allUsers = usersPage
-      else if (usersPage?.content) {
-        allUsers = [...usersPage.content]
-        const totalPages = usersPage.totalPages || 1
-        for (let p = 1; p < totalPages; p++) {
-          try {
-            const pg = await api.getUsers(`?page=${p}&size=1000`)
-            if (pg?.content) allUsers.push(...pg.content)
-          } catch { /* keep already loaded pages */ }
-        }
-      }
-      const userMap = {}
-      allUsers.forEach((u) => { userMap[String(u.id)] = u })
-      const regIds = new Set(registered.map((h) => String(h.id)))
-      // Room creator = host (per backend rule): add room hosts missing from register
-      const seen = new Set()
-      const derived = []
-      rooms.forEach((r) => {
-        const hid = r.hostId ?? r.host
-        if (hid === undefined || hid === null || hid === '') return
-        const key = String(hid)
-        if (regIds.has(key) || seen.has(key)) return
-        seen.add(key)
-        const u = userMap[key]
-        const live = r.status === 'LIVE' || r.status === 'live' || r.status === 'active'
-        derived.push({
-          id: hid,
-          name: u?.name || u?.username || key,
-          email: u?.email || '-',
-          status: live ? 'live' : (r.status || 'active'),
-          followers: r.viewerCount ?? r.participants ?? 0,
-          gifts: '-',
-          pkWins: '-',
-          pkLosses: '-',
-          roomName: r.roomName || r.name || '-',
-          country: r.countryCode || r.country || '-',
-          source: 'room',
-        })
-      })
-      setHosts([
-        ...registered.map((h) => ({ ...h, source: 'registered' })),
-        ...derived,
-      ])
+      setHosts(list.map((h) => ({ ...h, source: 'registered' })))
     } catch (err) {
       setError(err?.message || 'Failed to load hosts')
     } finally {
@@ -92,14 +45,9 @@ export default function Hosts() {
 
   const performAction = async () => {
     try {
-      if (actionType === 'approve') {
-        await api.approveHost(actionModal.id)
-      } else if (actionType === 'reject') {
-        await api.updateHostApproval(actionModal.id, { status: 'rejected' })
-      } else if (actionType === 'ban') {
+      if (actionType === 'ban') {
         const newStatus = actionModal.status === 'banned' ? 'active' : 'banned'
-        if (actionModal.source === 'room') await api.updateUserStatus(actionModal.id, { status: newStatus })
-        else await api.updateHostApproval(actionModal.id, { status: newStatus })
+        await api.updateHostApproval(actionModal.id, { status: newStatus })
       }
       setActionModal(null)
       fetchHosts()
@@ -112,8 +60,7 @@ export default function Hosts() {
   const filtered = hosts.filter((h) =>
     (h.name || '').toLowerCase().includes(search.toLowerCase()) ||
     (h.email || '').toLowerCase().includes(search.toLowerCase()) ||
-    String(h.id || '').includes(search) ||
-    (h.roomName || '').toLowerCase().includes(search.toLowerCase())
+    String(h.id || '').includes(search)
   )
 
   if (loading) return <Loading />
@@ -144,28 +91,22 @@ export default function Hosts() {
                   <th>Room</th>
                   <th>Followers</th>
                   <th>Gifts</th>
-                  <th>PK (W/L)</th>
+                  <th>PK Battles</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((h) => (
-                  <tr key={`${h.source || 'reg'}-${h.id}`}>
+                  <tr key={h.id}>
                     <td style={{ fontWeight: 500 }}>{h.name}</td>
                     <td>{h.email}</td>
                     <td><span className={`badge ${h.status}`}>{h.status}</span></td>
-                    <td>{h.roomName || '-'}</td>
+                    <td>{h.roomName || h.roomId || '-'}</td>
                     <td>{(h.followers ?? 0).toLocaleString()}</td>
                     <td>{h.gifts ?? '-'}</td>
-                    <td>{h.pkWins ?? '-'}/{h.pkLosses ?? '-'}</td>
+                    <td>{h.pkBattles ?? '-'}</td>
                     <td>
                       <div className="actions">
-                        {h.status === 'pending' && canApprove && (
-                          <>
-                            <button className="btn btn-success btn-sm" onClick={() => handleAction('approve', h)}>Approve</button>
-                            <button className="btn btn-danger btn-sm" onClick={() => handleAction('reject', h)}>Reject</button>
-                          </>
-                        )}
                         {canApprove && (
                           <button className={`btn btn-sm ${h.status === 'banned' ? 'btn-success' : 'btn-warning'}`} onClick={() => handleAction('ban', h)}>
                             {h.status === 'banned' ? 'Unban' : 'Ban'}
@@ -182,12 +123,12 @@ export default function Hosts() {
       </div>
 
       {actionModal && (
-        <Modal title={actionType === 'approve' ? 'Approve Host' : actionType === 'reject' ? 'Reject Host' : `${actionType === 'ban' && actionModal.status === 'banned' ? 'Unban' : 'Ban'} Host`} onClose={() => setActionModal(null)}>
-          <p>Are you sure you want to {actionType === 'approve' ? 'approve' : actionType === 'reject' ? 'reject' : actionModal.status === 'banned' ? 'unban' : 'ban'} <strong>{actionModal.name}</strong>?</p>
+        <Modal title={`${actionModal.status === 'banned' ? 'Unban' : 'Ban'} Host`} onClose={() => setActionModal(null)}>
+          <p>Are you sure you want to {actionModal.status === 'banned' ? 'unban' : 'ban'} <strong>{actionModal.name}</strong>?</p>
           <div className="modal-actions">
             <button className="btn btn-outline" onClick={() => setActionModal(null)}>Cancel</button>
-            <button className={`btn ${actionType === 'approve' ? 'btn-success' : 'btn-danger'}`} onClick={performAction}>
-              {actionType === 'approve' ? 'Approve' : actionType === 'reject' ? 'Reject' : actionModal.status === 'banned' ? 'Unban' : 'Ban'}
+            <button className="btn btn-danger" onClick={performAction}>
+              {actionModal.status === 'banned' ? 'Unban' : 'Ban'}
             </button>
           </div>
         </Modal>
