@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import Modal from '../components/Modal'
-import { api } from '../services/api'
+import { useToast } from '../context/ToastContext'
+import { api, resolveAssetUrl } from '../services/api'
 import Loading from '../components/Loading'
 
-
-
 export default function Gifts() {
+  const { addToast } = useToast()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [gifts, setGifts] = useState([])
@@ -22,17 +22,13 @@ export default function Gifts() {
   const [txPage, setTxPage] = useState(0)
   const TX_PAGE_SIZE = 20
   const [txError, setTxError] = useState('')
-  const [form, setForm] = useState({ code: '', name: '', icon: '', animationUrl: '', coins: '', category: 'gift' })
+  const [form, setForm] = useState({ code: '', name: '', icon: '', animationUrl: '', coins: '', category: 'gift', giftExpiryDays: '' })
+  const [iconFile, setIconFile] = useState(null)
+  const [animationFile, setAnimationFile] = useState(null)
   const [giftCounts, setGiftCounts] = useState(null)
   const [mostSent, setMostSent] = useState(null)
 
-  const API_ORIGIN = 'https://api.tuktuk.live'
-  const resolveUrl = (u) => {
-    if (!u) return ''
-    if (u.startsWith('http') || u.startsWith('data:')) return u
-    if (u.startsWith('/')) return `${API_ORIGIN}${u}`
-    return u
-  }
+  const resolveUrl = (u) => resolveAssetUrl(u)
 
   const fetchGifts = async () => {
     setLoading(true)
@@ -46,7 +42,7 @@ export default function Gifts() {
       const list = Array.isArray(data) ? data : (data?.content || data?.data || [])
       setGifts(list.map((g) => {
         const isActive = g.active !== false && (g.status ? g.status === 'active' : true)
-        const iconUrl = g.iconUrl || g.icon || g.imageUrl || g.giftIconUrl || g.giftImage || ''
+        const iconUrl = g.iconUrl || g.coverImage || g.icon || g.imageUrl || g.giftIconUrl || g.giftImage || ''
         const totalSent = g.totalSent ?? g.sentCount ?? 0
         return { ...g, icon: iconUrl, imageUrl: iconUrl, iconUrl, totalSent, coins: g.coins ?? g.price ?? 0, price: g.price ?? g.coins ?? 0, active: isActive, status: isActive ? 'active' : 'inactive' }
       }))
@@ -63,19 +59,25 @@ export default function Gifts() {
   }, [])
 
   const openAdd = () => {
-    setForm({ code: '', name: '', icon: '', animationUrl: '', coins: '', category: 'gift' })
+    setForm({ code: '', name: '', icon: '', animationUrl: '', coins: '', category: 'gift', giftExpiryDays: '7' })
+    setIconFile(null)
+    setAnimationFile(null)
     setShowAddAnim(false)
     setShowAdd(true)
   }
 
   const openAddAnim = () => {
-    setForm({ code: '', name: '', icon: '', animationUrl: '', coins: '', category: 'pk' })
+    setForm({ code: '', name: '', icon: '', animationUrl: '', coins: '', category: 'pk', giftExpiryDays: '7' })
+    setIconFile(null)
+    setAnimationFile(null)
     setShowAdd(false)
     setShowAddAnim(true)
   }
 
   const openEdit = (g) => {
-    setForm({ code: g.code || '', name: g.name, icon: g.iconUrl || g.icon || g.imageUrl || g.giftIconUrl || g.giftImage || '', animationUrl: g.animationUrl || '', coins: String(g.coins ?? g.price ?? ''), category: g.category || 'gift' })
+    setForm({ code: g.code || '', name: g.name, icon: g.iconUrl || g.coverImage || g.icon || g.imageUrl || g.giftIconUrl || g.giftImage || '', animationUrl: g.animationUrl || '', coins: String(g.coins ?? g.price ?? ''), category: g.category || 'gift', giftExpiryDays: (g.expiryDays ?? g.giftExpiryDays) != null ? String(g.expiryDays ?? g.giftExpiryDays) : '' })
+    setIconFile(null)
+    setAnimationFile(null)
     setEditModal(g)
   }
 
@@ -92,41 +94,55 @@ export default function Gifts() {
     }
     if (editModal) {
       // Backend contract: {code, name, iconUrl, animationUrl, price, category, active}
-      const data = { code: codeVal, name: form.name, iconUrl: iconVal, animationUrl: animVal, icon: iconVal, imageUrl: iconVal, price: diamonds, coins: diamonds, category, active: editModal.active !== false }
+      const data = { code: codeVal, name: form.name, iconUrl: iconVal, animationUrl: animVal, icon: iconVal, imageUrl: iconVal, price: diamonds, coins: diamonds, category, active: editModal.active !== false, giftExpiryDays: form.giftExpiryDays ? Number(form.giftExpiryDays) : undefined }
       try {
         await api.updateGift(editModal.id, data)
       } catch (apiErr) {
         setError(apiErr.message || 'Failed to update gift')
+        addToast(apiErr.message || 'Failed to update gift', 'error')
+        return
       }
       setEditModal(null)
+      setError('')
+      addToast('Gift updated', 'success')
       await fetchGifts()
     } else if (showAddAnim) {
-      // Add Animation: same API, no iconUrl
-      if (!animVal) {
-        setError('Animation URL is required')
+      // Add Animation: multipart POST, URL ya video file (ya dono)
+      if (!animVal && !animationFile) {
+        setError('Animation URL or video file is required')
         return
       }
-      const data = { code: codeVal, name: form.name, animationUrl: animVal, price: diamonds, coins: diamonds, category, active: true }
+      const data = { code: codeVal, name: form.name, animationUrl: animVal, price: diamonds, coins: diamonds, category, active: true, giftExpiryDays: form.giftExpiryDays ? Number(form.giftExpiryDays) : undefined }
       try {
-        await api.createAnimation(data)
+        await api.createAnimation(data, { animationFile })
       } catch (apiErr) {
         setError(apiErr.message || 'Failed to create animation')
-      }
-      setShowAddAnim(false)
-      await fetchGifts()
-    } else {
-      // Add Gift: same API, no animationUrl
-      if (!iconVal) {
-        setError('Icon URL is required')
+        addToast(apiErr.message || 'Failed to create animation', 'error')
         return
       }
-      const data = { code: codeVal, name: form.name, iconUrl: iconVal, icon: iconVal, imageUrl: iconVal, price: diamonds, coins: diamonds, category, active: true }
+      setShowAddAnim(false)
+      setAnimationFile(null)
+      setError('')
+      addToast('Animation created', 'success')
+      await fetchGifts()
+    } else {
+      // Add Gift: multipart POST, URL ya image file (ya dono)
+      if (!iconVal && !iconFile) {
+        setError('Icon URL or image file is required')
+        return
+      }
+      const data = { code: codeVal, name: form.name, iconUrl: iconVal, icon: iconVal, imageUrl: iconVal, price: diamonds, coins: diamonds, category, active: true, giftExpiryDays: form.giftExpiryDays ? Number(form.giftExpiryDays) : undefined }
       try {
-        await api.createGift(data)
+        await api.createGift(data, { iconFile })
       } catch (apiErr) {
         setError(apiErr.message || 'Failed to create gift')
+        addToast(apiErr.message || 'Failed to create gift', 'error')
+        return
       }
       setShowAdd(false)
+      setIconFile(null)
+      setError('')
+      addToast('Gift created', 'success')
       await fetchGifts()
     }
   }
@@ -138,18 +154,22 @@ export default function Gifts() {
     const newActive = !isActive
     try {
       await api.patchGift(id, { active: newActive })
+      setGifts((prev) => prev.map((g) => g.id === id ? { ...g, active: newActive, status: newActive ? 'active' : 'inactive' } : g))
+      addToast(newActive ? 'Gift enabled' : 'Gift disabled', 'success')
     } catch (apiErr) {
+      addToast(apiErr.message || 'Failed to update gift status', 'error')
     }
-    setGifts((prev) => prev.map((g) => g.id === id ? { ...g, active: newActive, status: newActive ? 'active' : 'inactive' } : g))
   }
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this gift?')) return
     try {
       await api.deleteGift(id)
+      setGifts((prev) => prev.filter((g) => g.id !== id))
+      addToast('Gift deleted', 'success')
     } catch (apiErr) {
+      addToast(apiErr.message || 'Failed to delete gift', 'error')
     }
-    setGifts((prev) => prev.filter((g) => g.id !== id))
   }
 
   const loadTransactions = async () => {
@@ -179,6 +199,11 @@ export default function Gifts() {
 
   return (
     <div>
+      {error && (
+        <div className="error-banner" style={{ background: '#fff5f5', color: '#e53e3e', padding: '8px 16px', borderRadius: 'var(--radius)', marginBottom: 16, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
       <div className="stats-grid">
         <div className="stats-card"><div className="label">Total Gifts</div><div className="value">{giftCounts ? ((giftCounts.activeGifts ?? 0) + (giftCounts.inactiveGifts ?? 0)) : gifts.length}</div></div>
         <div className="stats-card"><div className="label">Active Gifts</div><div className="value">{giftCounts?.activeGifts ?? gifts.filter((g) => g.status === 'active').length}</div></div>
@@ -220,7 +245,7 @@ export default function Gifts() {
               </thead>
               <tbody>
                 {filtered.map((g) => {
-                  const rawIcon = g.iconUrl || g.imageUrl || g.icon || ''
+                          const rawIcon = g.iconUrl || g.coverImage || g.imageUrl || g.icon || ''
                   const src = resolveUrl(rawIcon)
                   const isImg = src && (src.startsWith('http') || rawIcon.startsWith('/'))
                   return (
@@ -283,20 +308,23 @@ export default function Gifts() {
                 const d = t.createdAt ? new Date(t.createdAt) : (t.date ? new Date(t.date) : null)
                 if (!d) return false
                 const diffDays = (now - d) / (1000 * 60 * 60 * 24)
-                if (txDateFilter === 'today' && diffDays > 1) return false
+                if (txDateFilter === 'today') {
+                  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+                  if (d < start) return false
+                }
                 if (txDateFilter === '7days' && diffDays > 7) return false
               }
               return true
             })
             const totalDiamonds = filteredTx.reduce((s, t) => s + (Number(t.diamonds ?? t.giftPrice ?? t.coins ?? t.price ?? 0) || 0), 0)
             const pageCount = Math.max(1, Math.ceil(filteredTx.length / TX_PAGE_SIZE))
-            const pageTx = filteredTx.slice(txPage * TX_PAGE_SIZE, txPage * TX_PAGE_SIZE + TX_PAGE_SIZE)
+            const safePage = Math.min(txPage, pageCount - 1)
+            const pageTx = filteredTx.slice(safePage * TX_PAGE_SIZE, safePage * TX_PAGE_SIZE + TX_PAGE_SIZE)
             if (transactions.length === 0) {
               return (
                 <div style={{ textAlign: 'center', color: 'var(--text-light)', padding: 24 }}>
                   <p style={{ marginBottom: 8 }}>No sent gifts yet</p>
                   {txError && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 8 }}>Error: {txError}</p>}
-                  <p style={{ fontSize: 12 }}>Waiting for backend: <code>GET /gifts/room-history</code> should return <code>[&#123;senderName, giftName, giftIconUrl, giftAnimationUrl, giftPrice, receiverName, roomName, createdAt&#125;]</code></p>
                 </div>
               )
             }
@@ -305,7 +333,7 @@ export default function Gifts() {
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12, fontSize: 13 }}>
                   <span><strong>{filteredTx.length}</strong> sends</span>
                   <span>💎 <strong>{totalDiamonds.toLocaleString()}</strong> diamonds</span>
-                  <span style={{ marginLeft: 'auto' }}>Page {txPage + 1} / {pageCount}</span>
+                  <span style={{ marginLeft: 'auto' }}>Page {safePage + 1} / {pageCount}</span>
                 </div>
                 <div className="table-wrapper">
                   <table>
@@ -345,18 +373,26 @@ export default function Gifts() {
       </div>
       )}
 
+      <datalist id="gift-categories">
+        {['gift', 'pk', 'LOVE', 'Ring', 'relationship', 'special', 'vip', 'activity', 'random', 'listen_reward', 'Basic', 'Flowers', 'Cute', 'Royal', 'Luxury', 'Premium'].map((c) => <option key={c} value={c} />)}
+      </datalist>
+
       {showAdd && (
         <Modal title="Add New Gift" onClose={() => setShowAdd(false)}>
           <form onSubmit={handleSave}>
             <div className="form-group"><label>Code * (e.g. rose-100)</label><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required placeholder="rose-100" /></div>
             <div className="form-group"><label>Name</label><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder="Rose" /></div>
-            <div className="form-group"><label>Icon URL * (/uploads/... or https://...)</label><input value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} required placeholder="/uploads/gifts/rose.png or https://..." /></div>
+            <div className="form-group"><label>Icon URL (or upload image below)</label><input value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} placeholder="/uploads/gifts/rose.png or https://..." /></div>
+            <div className="form-group">
+              <label>Upload Image (png/jpg)</label>
+              <input type="file" accept="image/*" onChange={(e) => setIconFile(e.target.files?.[0] || null)} />
+              {iconFile && <span style={{ fontSize: 12, color: 'var(--text-light)' }}>{iconFile.name}</span>}
+            </div>
             <div className="form-group"><label>Price (diamonds)</label><input type="number" value={form.coins} onChange={(e) => setForm({ ...form, coins: e.target.value })} required /></div>
+            <div className="form-group"><label>Expiry Days</label><input type="number" value={form.giftExpiryDays} onChange={(e) => setForm({ ...form, giftExpiryDays: e.target.value })} placeholder="7" /></div>
             <div className="form-group">
               <label>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14 }}>
-                {['gift', 'Basic', 'Flowers', 'Cute', 'Royal', 'Luxury', 'Premium'].map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <input list="gift-categories" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="e.g. gift, pk, LOVE, Ring" />
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-outline" onClick={() => setShowAdd(false)}>Cancel</button>
@@ -371,13 +407,17 @@ export default function Gifts() {
           <form onSubmit={handleSave}>
             <div className="form-group"><label>Code * (e.g. rose-anim-100)</label><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required placeholder="rose-anim-100" /></div>
             <div className="form-group"><label>Name</label><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder="Rose Animation" /></div>
-            <div className="form-group"><label>Animation URL * (/uploads/... or https://...)</label><input value={form.animationUrl} onChange={(e) => setForm({ ...form, animationUrl: e.target.value })} required placeholder="/uploads/gifts/rose.mp4 or https://..." /></div>
+            <div className="form-group"><label>Animation URL (or upload video below)</label><input value={form.animationUrl} onChange={(e) => setForm({ ...form, animationUrl: e.target.value })} placeholder="/uploads/gifts/rose.mp4 or https://..." /></div>
+            <div className="form-group">
+              <label>Upload Video (mp4)</label>
+              <input type="file" accept="video/mp4,video/*" onChange={(e) => setAnimationFile(e.target.files?.[0] || null)} />
+              {animationFile && <span style={{ fontSize: 12, color: 'var(--text-light)' }}>{animationFile.name}</span>}
+            </div>
             <div className="form-group"><label>Price (diamonds)</label><input type="number" value={form.coins} onChange={(e) => setForm({ ...form, coins: e.target.value })} required /></div>
+            <div className="form-group"><label>Expiry Days</label><input type="number" value={form.giftExpiryDays} onChange={(e) => setForm({ ...form, giftExpiryDays: e.target.value })} placeholder="7" /></div>
             <div className="form-group">
               <label>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14 }}>
-                {['pk', 'Basic', 'Flowers', 'Cute', 'Royal', 'Luxury', 'Premium'].map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <input list="gift-categories" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="e.g. pk, gift, LOVE, Ring" />
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-outline" onClick={() => setShowAddAnim(false)}>Cancel</button>
@@ -395,11 +435,10 @@ export default function Gifts() {
             <div className="form-group"><label>Icon URL (/uploads/... or https://...)</label><input value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} placeholder="/uploads/gifts/rose.png or https://..." /></div>
             <div className="form-group"><label>Animation URL (/uploads/... or https://...)</label><input value={form.animationUrl} onChange={(e) => setForm({ ...form, animationUrl: e.target.value })} placeholder="/uploads/gifts/rose.mp4 or https://..." /></div>
             <div className="form-group"><label>Price (diamonds)</label><input type="number" value={form.coins} onChange={(e) => setForm({ ...form, coins: e.target.value })} required /></div>
+            <div className="form-group"><label>Expiry Days</label><input type="number" value={form.giftExpiryDays} onChange={(e) => setForm({ ...form, giftExpiryDays: e.target.value })} placeholder="7" /></div>
             <div className="form-group">
               <label>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14 }}>
-                {['gift', 'pk', 'Basic', 'Flowers', 'Cute', 'Royal', 'Luxury', 'Premium'].map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <input list="gift-categories" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="e.g. gift, pk, LOVE, Ring" />
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-outline" onClick={() => setEditModal(null)}>Cancel</button>

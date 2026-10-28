@@ -12,6 +12,7 @@ export default function DailyMissions() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showModal, setShowModal] = useState(null)
+  const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ missionName: '', description: '', period: 'MONTHLY', goal: '', countryCode: '' })
 
   const normalize = (list) => (Array.isArray(list) ? list : []).map((m) => ({
@@ -25,25 +26,43 @@ export default function DailyMissions() {
     isNotify: m.isNotify ?? m.notified ?? false,
   }))
 
+  const loadMissions = async () => {
+    try {
+      setLoading(true)
+      setError('')
+      const mData = await api.getMissions()
+      const arr = Array.isArray(mData) ? mData : (mData?.content || [])
+      setMissions(normalize(arr))
+    } catch (e) {
+      setError(e?.message || 'Failed to load missions')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
         setLoading(true)
-        const [mData, cData, aData] = await Promise.all([
-          api.getMissions().catch(() => []),
-          api.getMissionCounts().catch(() => null),
-          api.getAdmins().catch(() => api.listAdmins().catch(() => [])),
+        const [mData, cData, aData] = await Promise.allSettled([
+          api.getMissions(),
+          api.getMissionCounts(),
+          api.getAdmins().catch(() => api.listAdmins()),
         ])
         if (cancelled) return
-        const arr = Array.isArray(mData) ? mData : (mData.content || [])
-        setMissions(normalize(arr))
-        if (cData) setCounts(cData)
-        const list = Array.isArray(aData) ? aData : (aData.admins || aData.content || [])
-        const codes = [...new Set(list.filter((a) => String(a.role).toLowerCase().includes('super')).map((a) => a.country || a.countryCode).filter(Boolean))]
-        setCountries(codes)
-      } catch (e) {
-        if (!cancelled) setError(e.message)
+        const failures = []
+        if (mData.status === 'fulfilled') {
+          const arr = Array.isArray(mData.value) ? mData.value : (mData.value?.content || [])
+          setMissions(normalize(arr))
+        } else failures.push(mData.reason?.message || 'missions')
+        if (cData.status === 'fulfilled' && cData.value) setCounts(cData.value)
+        if (aData.status === 'fulfilled') {
+          const list = Array.isArray(aData.value) ? aData.value : (aData.value?.admins || aData.value?.content || [])
+          const codes = [...new Set(list.filter((a) => String(a.role).toLowerCase().includes('super')).map((a) => a.country || a.countryCode).filter(Boolean))]
+          setCountries(codes)
+        }
+        if (failures.length) setError(`Failed to load: ${failures.join(', ')}`)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -62,52 +81,67 @@ export default function DailyMissions() {
     setShowModal({ type: 'edit', mission: m })
   }
 
-  const payload = () => ({
-    missionName: form.missionName,
-    description: form.description,
-    period: form.period,
-    goal: form.goal,
-    countryCode: form.countryCode || null,
-  })
+  const payload = () => {
+    const goalNum = Number(form.goal)
+    return {
+      missionName: form.missionName,
+      description: form.description,
+      period: form.period,
+      goal: form.goal !== '' && Number.isFinite(goalNum) ? goalNum : form.goal,
+      countryCode: form.countryCode || null,
+    }
+  }
 
   const handleSave = async (e) => {
     e.preventDefault()
-    if (showModal.type === 'edit') {
-      try {
+    setSaving(true)
+    setError('')
+    try {
+      if (showModal.type === 'edit') {
         await api.updateMission(showModal.mission.id, payload())
-        setMissions((prev) => prev.map((m) => m.id === showModal.mission.id ? { ...m, name: form.missionName, description: form.description, period: form.period, goal: form.goal, countryCode: form.countryCode || null } : m))
-      } catch (e) { setError(e.message) }
-    } else {
-      try {
+        setMissions((prev) => prev.map((m) => m.id === showModal.mission.id ? { ...m, name: form.missionName, description: form.description, period: form.period, goal: payload().goal, countryCode: form.countryCode || null } : m))
+      } else {
         const created = await api.createMission(payload())
-        const row = created?.id ? normalize([created])[0] : { ...normalize([{ ...payload(), id: Date.now() }])[0] }
-        setMissions((prev) => [row, ...prev])
-      } catch (e) { setError(e.message) }
+        if (created && created.id != null) {
+          setMissions((prev) => [normalize([created])[0], ...prev])
+        } else {
+          // Backend didn't return the new row — re-read the list instead of inventing an id.
+          await loadMissions()
+        }
+      }
+      setShowModal(null)
+    } catch (err) {
+      setError(err?.message || 'Failed to save mission')
+    } finally {
+      setSaving(false)
     }
-    setShowModal(null)
   }
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (m) => {
+    if (!window.confirm(`Delete mission "${m.name}"?`)) return
+    setError('')
     try {
-      await api.deleteMission(id)
-      setMissions((prev) => prev.filter((m) => m.id !== id))
-    } catch (e) { setError(e.message) }
+      await api.deleteMission(m.id)
+      setMissions((prev) => prev.filter((x) => x.id !== m.id))
+    } catch (e) { setError(e?.message || 'Failed to delete mission') }
   }
 
   const toggleStatus = async (m) => {
     const active = m.status !== 'active'
+    setError('')
     try {
       await api.toggleMissionStatus(m.id, active)
       setMissions((prev) => prev.map((x) => x.id === m.id ? { ...x, status: active ? 'active' : 'inactive' } : x))
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError(e?.message || 'Failed to update mission status') }
   }
 
   const handleNotify = async (m) => {
+    setError('')
     try {
       const res = await api.notifyMission(m.id)
       const notified = res?.isNotify ?? true
       setMissions((prev) => prev.map((x) => x.id === m.id ? { ...x, isNotify: notified } : x))
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError(e?.message || 'Failed to notify mission') }
   }
 
   if (loading) return <Loading text="Loading missions..." />
@@ -149,7 +183,7 @@ export default function DailyMissions() {
                     <button className="btn btn-success btn-sm" onClick={() => handleNotify(m)} title={m.isNotify ? 'Already notified — click to notify again' : 'Notify all super admins'}>{m.isNotify ? 'Renotify' : 'Notify'}</button>
                     <button className="btn btn-outline btn-sm" onClick={() => openEdit(m)}>Edit</button>
                     <button className={`btn btn-sm ${m.status === 'active' ? 'btn-warning' : 'btn-success'}`} onClick={() => toggleStatus(m)}>{m.status === 'active' ? 'Deactivate' : 'Activate'}</button>
-                    <button className="btn btn-danger-outline btn-sm" onClick={() => handleDelete(m.id)}>Delete</button>
+                    <button className="btn btn-danger-outline btn-sm" onClick={() => handleDelete(m)}>Delete</button>
                   </div>
                 </div>
               ))}
@@ -178,8 +212,8 @@ export default function DailyMissions() {
               </select>
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn btn-outline" onClick={() => setShowModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">{showModal.type === 'create' ? 'Add Mission' : 'Save Changes'}</button>
+              <button type="button" className="btn btn-outline" onClick={() => setShowModal(null)} disabled={saving}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : showModal.type === 'create' ? 'Add Mission' : 'Save Changes'}</button>
             </div>
           </form>
         </Modal>

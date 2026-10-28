@@ -16,6 +16,15 @@ const cleanFlag = (c) => {
   return codeToFlag(c.countryCode || c.code) || '🌍'
 }
 
+const toArray = (data, ...keys) => {
+  if (Array.isArray(data)) return data
+  if (!data || typeof data !== 'object') return []
+  for (const k of ['content', 'data', ...keys]) {
+    if (Array.isArray(data[k])) return data[k]
+  }
+  return []
+}
+
 const mapCountryStats = (c) => ({
   countryCode: c.countryCode || c.code || c.country || 'Unknown',
   country: c.countryName || c.country || c.name || c.code || 'Unknown',
@@ -27,7 +36,7 @@ const mapCountryStats = (c) => ({
   activeRooms: c.activeRooms ?? 0,
   closedRooms: c.closedRooms ?? 0,
   revenue: (c.revenueUsd ?? c.revenue) != null ? `₹${Number(c.revenueUsd ?? c.revenue).toLocaleString()}` : '₹0',
-  revenueRaw: c.revenueUsd ?? 0,
+  revenueRaw: Number(c.revenueUsd ?? c.revenue ?? 0) || 0,
   reports: c.reportsCount ?? c.reports ?? c.pendingReports ?? 0,
   status: c.active === false ? 'inactive' : c.active === true ? 'active' : (c.status || 'active'),
 })
@@ -44,6 +53,7 @@ export default function CountryHandler() {
   const [rooms, setRooms] = useState([])
   const [support, setSupport] = useState([])
   const [revenue, setRevenue] = useState(null)
+  const [detailError, setDetailError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -53,7 +63,7 @@ export default function CountryHandler() {
         setError(null)
         const data = await api.getCountriesStats()
         if (cancelled) return
-        const list = (data.content || data.data || data || [])
+        const list = toArray(data, 'countries')
         const mapped = list.map(mapCountryStats)
         setCountries(mapped)
         // The list endpoint has no activeUsers — enrich each row from detail stats
@@ -62,7 +72,7 @@ export default function CountryHandler() {
             const d = await api.getCountryStats(m.countryCode)
             if (d && !Array.isArray(d)) {
               const dm = mapCountryStats(d)
-              return { ...m, activeUsers: dm.activeUsers ?? m.activeUsers }
+              return { ...m, activeUsers: dm.activeUsers ?? m.activeUsers, activeRooms: dm.activeRooms ?? m.activeRooms }
             }
           } catch { /* detail enrichment optional — keep list values */ }
           return m
@@ -106,24 +116,25 @@ export default function CountryHandler() {
     if (!selectedCountry) return
     const code = selectedCountry.countryCode || selectedCountry.country
     setDetailTab(tab)
+    setDetailError('')
+    if (tab === 'stats') return
     setDetailLoading(true)
     try {
       if (tab === 'hosts') {
         const data = await api.getCountryHosts(code, { status: '', page: 0, size: 20 })
-        setHosts(data.content || data.data || data || [])
+        setHosts(toArray(data, 'hosts'))
       } else if (tab === 'rooms') {
         const data = await api.getCountryRooms(code)
-        const list = data.content || data.data || (Array.isArray(data) ? data : data.rooms || [])
-        setRooms(Array.isArray(list) ? list : [])
+        setRooms(toArray(data, 'rooms'))
       } else if (tab === 'support') {
         const data = await api.getCountrySupport(code)
-        setSupport(data.content || data.data || (Array.isArray(data) ? data : data.reports || []))
+        setSupport(toArray(data, 'reports', 'tickets'))
       } else if (tab === 'revenue') {
         const data = await api.getCountryRevenue(code)
         setRevenue(data)
       }
     } catch (err) {
-      console.error(`Failed to fetch ${tab}:`, err)
+      setDetailError(err?.message || `Failed to load ${tab}`)
     } finally {
       setDetailLoading(false)
     }
@@ -183,12 +194,13 @@ export default function CountryHandler() {
             ))}
           </div>
           {detailLoading && <Loading />}
+          {!detailLoading && detailError && <div style={{ padding: '8px 12px', borderRadius: 8, fontSize: 13, background: '#fee2e2', color: '#991b1b', marginBottom: 12 }}>{detailError}</div>}
           {!detailLoading && detailTab === 'stats' && (
             <div className="detail-grid">
               <div className="detail-item"><div className="detail-label">Total Users</div><div className="detail-value">{selectedCountry.users.toLocaleString()}</div></div>
               <div className="detail-item"><div className="detail-label">Active Users</div><div className="detail-value">{selectedCountry.activeUsers.toLocaleString()}</div></div>
               <div className="detail-item"><div className="detail-label">Active Hosts</div><div className="detail-value">{selectedCountry.hosts}</div></div>
-              <div className="detail-item"><div className="detail-label">Active Rooms</div><div className="detail-value">{selectedCountry.rooms}</div></div>
+              <div className="detail-item"><div className="detail-label">Active Rooms</div><div className="detail-value">{selectedCountry.activeRooms ?? selectedCountry.rooms}</div></div>
               <div className="detail-item"><div className="detail-label">Revenue</div><div className="detail-value">{selectedCountry.revenue}</div></div>
               <div className="detail-item"><div className="detail-label">Pending Reports</div><div className="detail-value">{selectedCountry.reports}</div></div>
             </div>
@@ -237,7 +249,7 @@ export default function CountryHandler() {
           )}
           {!detailLoading && detailTab === 'revenue' && (
             <div className="detail-grid">
-              <div className="detail-item"><div className="detail-label">Total Revenue</div><div className="detail-value" style={{ fontSize: 28, color: 'var(--success)' }}>₹{revenue ? Number(revenue.totalRevenue || revenue.revenue || revenue).toLocaleString() : '0'}</div></div>
+              <div className="detail-item"><div className="detail-label">Total Revenue</div><div className="detail-value" style={{ fontSize: 28, color: 'var(--success)' }}>₹{Number(revenue?.totalRevenue ?? revenue?.revenue ?? revenue?.amount ?? revenue ?? 0).toLocaleString()}</div></div>
               <div className="detail-item"><div className="detail-label">Currency</div><div className="detail-value">INR</div></div>
             </div>
           )}

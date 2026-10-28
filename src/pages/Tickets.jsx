@@ -1,9 +1,35 @@
 import { useState, useEffect } from 'react'
+import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
+import { hasPermission, PERMISSIONS } from '../permissions'
 import Modal from '../components/Modal'
 import { api } from '../services/api'
 import Loading from '../components/Loading'
 
+const statusOf = (t) => String(t?.status || '').toLowerCase()
+const nameOf = (v) => {
+  if (v == null) return '—'
+  if (typeof v === 'object') return v.name || v.username || v.email || v.id || '—'
+  return v
+}
+const formatDate = (v) => {
+  if (!v) return '—'
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString()
+}
+const normalizeMessage = (m) => {
+  const sender = m.sender || m.from || m.senderType || m.role || ''
+  const fromSupport = /support|admin|agent/i.test(String(sender)) || m.support === true || m.isAdmin === true
+  return {
+    text: m.text ?? m.message ?? m.content ?? m.body ?? '',
+    from: fromSupport ? 'Support' : (typeof sender === 'string' ? sender : (m.senderName || m.userName || 'User')),
+    time: formatDate(m.time || m.createdAt || m.sentAt || m.timestamp),
+  }
+}
+
 export default function Tickets() {
+  const { user } = useAuth()
+  const { addToast } = useToast()
   const [tickets, setTickets] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -11,13 +37,18 @@ export default function Tickets() {
   const [chatModal, setChatModal] = useState(null)
   const [chatInput, setChatInput] = useState('')
   const [messages, setMessages] = useState([])
+  const canManage = hasPermission(user, PERMISSIONS.MANAGE_TICKETS)
+  const canChat = hasPermission(user, PERMISSIONS.LIVE_CHAT_SUPPORT)
 
   useEffect(() => {
     let cancelled = false
-    const params = filter === 'all' ? '' : `?status=${filter}&page=0&size=20`
-    api.getTickets(params)
+    setLoading(true)
+    setError(null)
+    api.getTickets({ page: 0, size: 500 })
       .then((data) => {
-        if (!cancelled) setTickets(Array.isArray(data) ? data : (data?.content || []))
+        if (cancelled) return
+        const list = Array.isArray(data) ? data : (data?.content || data?.tickets || data?.data || [])
+        setTickets(list)
       })
       .catch((err) => {
         if (!cancelled) setError(err.message)
@@ -26,9 +57,12 @@ export default function Tickets() {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [filter])
+  }, [])
 
-  const openCount = tickets.filter((t) => t.status === 'open').length
+  const filtered = filter === 'all' ? tickets : tickets.filter((t) => statusOf(t) === filter)
+  const openCount = tickets.filter((t) => statusOf(t) === 'open').length
+  const inProgressCount = tickets.filter((t) => statusOf(t) === 'in_progress').length
+  const resolvedCount = tickets.filter((t) => statusOf(t) === 'resolved').length
 
   const handleSendMessage = async (e) => {
     e.preventDefault()
@@ -37,16 +71,19 @@ export default function Tickets() {
     try {
       await api.sendTicketMessage(chatModal.id, msg)
       setMessages((prev) => [...prev, { ...msg, time: new Date().toLocaleTimeString() }])
-    } catch {}
-    setChatInput('')
+      setChatInput('')
+    } catch (err) {
+      addToast(err?.message || 'Failed to send message', 'error')
+    }
   }
 
   const handleAssign = async (ticket) => {
     try {
       await api.updateTicketStatus(ticket.id, { status: 'in_progress' })
-      setTickets((prev) => prev.map((t) => t.id === ticket.id ? { ...t, status: 'in_progress', assignee: 'Support Staff' } : t))
+      setTickets((prev) => prev.map((t) => t.id === ticket.id ? { ...t, status: 'in_progress', assignee: user?.name || 'Support Staff' } : t))
+      addToast('Ticket assigned', 'success')
     } catch (err) {
-      console.error('Failed to assign ticket:', err)
+      addToast(err?.message || 'Failed to assign ticket', 'error')
     }
   }
 
@@ -54,10 +91,11 @@ export default function Tickets() {
     try {
       await api.updateTicketStatus(ticket.id, { status: 'resolved' })
       setTickets((prev) => prev.map((t) => t.id === ticket.id ? { ...t, status: 'resolved' } : t))
+      setChatModal(null)
+      addToast('Ticket resolved', 'success')
     } catch (err) {
-      console.error('Failed to resolve ticket:', err)
+      addToast(err?.message || 'Failed to resolve ticket', 'error')
     }
-    setChatModal(null)
   }
 
   const openChat = async (ticket) => {
@@ -65,8 +103,11 @@ export default function Tickets() {
     setMessages([])
     try {
       const data = await api.getTicketMessages(ticket.id)
-      setMessages(Array.isArray(data) ? data : [])
-    } catch {}
+      const list = Array.isArray(data) ? data : (data?.content || data?.messages || data?.data || [])
+      setMessages(list.map(normalizeMessage))
+    } catch (err) {
+      addToast(err?.message || 'Failed to load messages', 'error')
+    }
   }
 
   if (loading) return <Loading text="Loading tickets..." />
@@ -77,8 +118,8 @@ export default function Tickets() {
       <div className="stats-grid">
         <div className="stats-card"><div className="label">Total Tickets</div><div className="value">{tickets.length}</div></div>
         <div className="stats-card"><div className="label">Open</div><div className="value" style={{ color: 'var(--danger)' }}>{openCount}</div></div>
-        <div className="stats-card"><div className="label">In Progress</div><div className="value" style={{ color: 'var(--warning)' }}>{tickets.filter((t) => t.status === 'in_progress').length}</div></div>
-        <div className="stats-card"><div className="label">Resolved</div><div className="value" style={{ color: 'var(--success)' }}>{tickets.filter((t) => t.status === 'resolved').length}</div></div>
+        <div className="stats-card"><div className="label">In Progress</div><div className="value" style={{ color: 'var(--warning)' }}>{inProgressCount}</div></div>
+        <div className="stats-card"><div className="label">Resolved</div><div className="value" style={{ color: 'var(--success)' }}>{resolvedCount}</div></div>
       </div>
 
       <div className="card">
@@ -98,20 +139,20 @@ export default function Tickets() {
                 <tr><th>User</th><th>Subject</th><th>Category</th><th>Priority</th><th>Status</th><th>Messages</th><th>Assignee</th><th>Date</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                  {tickets.map((t) => (
+                  {filtered.map((t) => (
                   <tr key={t.id}>
-                    <td style={{ fontWeight: 500 }}>{t.reporterUserName || t.user || '-'}</td>
+                    <td style={{ fontWeight: 500 }}>{nameOf(t.reporterUserName || t.user || t.userName)}</td>
                     <td>{t.subject}</td>
-                    <td><span className="badge" style={{ background: '#e0e7ff', color: '#3730a3' }}>{t.category}</span></td>
-                    <td><span className={`badge ${t.priority === 'urgent' ? 'banned' : t.priority === 'high' ? 'reported' : 'inactive'}`}>{t.priority}</span></td>
-                    <td><span className={`badge ${t.status === 'open' ? 'reported' : t.status === 'in_progress' ? 'pending' : 'active'}`}>{t.status.replace('_', ' ')}</span></td>
-                    <td>{t.messages}</td>
-                    <td>{t.assignee}</td>
-                    <td>{t.date}</td>
+                    <td><span className="badge" style={{ background: '#e0e7ff', color: '#3730a3' }}>{t.category || '-'}</span></td>
+                    <td><span className={`badge ${t.priority === 'urgent' ? 'banned' : t.priority === 'high' ? 'reported' : 'inactive'}`}>{t.priority || '-'}</span></td>
+                    <td><span className={`badge ${statusOf(t) === 'open' ? 'reported' : statusOf(t) === 'in_progress' ? 'pending' : 'active'}`}>{statusOf(t).replace('_', ' ') || '-'}</span></td>
+                    <td>{t.messages ?? t.messageCount ?? 0}</td>
+                    <td>{nameOf(t.assignee)}</td>
+                    <td>{formatDate(t.date || t.createdAt)}</td>
                     <td>
                       <div className="actions">
                         <button className="btn btn-primary btn-sm" onClick={() => openChat(t)}>Chat</button>
-                        {t.status === 'open' && <button className="btn btn-warning btn-sm" onClick={() => handleAssign(t)}>Assign</button>}
+                        {canManage && statusOf(t) === 'open' && <button className="btn btn-warning btn-sm" onClick={() => handleAssign(t)}>Assign</button>}
                       </div>
                     </td>
                   </tr>
@@ -139,12 +180,12 @@ export default function Tickets() {
             )}
           </div>
           <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 8 }}>
-            <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." style={{ flex: 1, padding: '8px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14 }} />
-            <button type="submit" className="btn btn-primary btn-sm">Send</button>
+            <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={canChat ? 'Type a message...' : 'You do not have live chat permission'} disabled={!canChat} style={{ flex: 1, padding: '8px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14 }} />
+            <button type="submit" className="btn btn-primary btn-sm" disabled={!canChat}>Send</button>
           </form>
           <div className="modal-actions" style={{ marginTop: 12 }}>
             <button className="btn btn-outline" onClick={() => setChatModal(null)}>Close</button>
-            {chatModal.status !== 'resolved' && (
+            {canManage && statusOf(chatModal) !== 'resolved' && (
               <button className="btn btn-success" onClick={() => handleResolve(chatModal)}>Mark Resolved</button>
             )}
           </div>

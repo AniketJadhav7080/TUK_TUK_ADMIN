@@ -15,27 +15,42 @@ export default function Dating() {
   useEffect(() => {
     let cancelled = false
     async function load() {
-      try {
-        setLoading(true)
-        const [profilesData, matchesData] = await Promise.all([
-          api.getDatingProfiles().catch(() => []),
-          api.getDatingMatches().catch(() => []),
-        ])
-        if (!cancelled) {
-          setProfiles(Array.isArray(profilesData) ? profilesData : [])
-          setMatches(Array.isArray(matchesData) ? matchesData : [])
-        }
-      } catch {
-        if (!cancelled) setError('Failed to load dating data')
-      } finally {
-        if (!cancelled) setLoading(false)
+      setLoading(true)
+      setError('')
+      const [profilesRes, matchesRes] = await Promise.allSettled([
+        api.getDatingProfiles(),
+        api.getDatingMatches(),
+      ])
+      if (cancelled) return
+      const errors = []
+      if (profilesRes.status === 'fulfilled') {
+        const d = profilesRes.value
+        setProfiles(Array.isArray(d) ? d : (d?.content || d?.profiles || d?.data || []))
+      } else {
+        errors.push(profilesRes.reason?.message || 'dating profiles')
       }
+      if (matchesRes.status === 'fulfilled') {
+        const d = matchesRes.value
+        setMatches(Array.isArray(d) ? d : (d?.content || d?.matches || d?.data || []))
+      } else {
+        errors.push(matchesRes.reason?.message || 'dating matches')
+      }
+      if (errors.length) setError(`Failed to load: ${errors.join(', ')}`)
+      setLoading(false)
     }
     load()
     return () => { cancelled = true }
   }, [])
 
-  const filteredProfiles = profiles.filter((p) => (p.name || p.username || '').toLowerCase().includes(search.toLowerCase()))
+  const filteredProfiles = profiles.filter((p) => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (p.name || p.username || '').toLowerCase().includes(q) ||
+      (p.location || '').toLowerCase().includes(q)
+  })
+
+  const statusOf = (p) => String(p?.status || 'active').toLowerCase()
+  const activeCount = profiles.filter((p) => statusOf(p) === 'active').length
 
   if (loading) return <Loading text="Loading dating data..." />
 
@@ -44,9 +59,9 @@ export default function Dating() {
       {error && <div className="alert alert-warning" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="stats-grid">
         <div className="stats-card"><div className="label">Total Profiles</div><div className="value">{profiles.length}</div></div>
-        <div className="stats-card"><div className="label">Active</div><div className="value" style={{ color: 'var(--success)' }}>{profiles.filter((p) => p.status === 'active' || !p.status).length}</div></div>
+        <div className="stats-card"><div className="label">Active</div><div className="value" style={{ color: 'var(--success)' }}>{activeCount}</div></div>
         <div className="stats-card"><div className="label">Matches</div><div className="value" style={{ color: 'var(--danger)' }}>{matches.length}</div></div>
-        <div className="stats-card"><div className="label">Success Rate</div><div className="value">{profiles.length > 0 ? Math.round((matches.length / profiles.length) * 100) + '%' : 'N/A'}</div></div>
+        <div className="stats-card"><div className="label">Inactive Profiles</div><div className="value">{profiles.length - activeCount}</div></div>
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -65,7 +80,7 @@ export default function Dating() {
               <input placeholder="Search profiles..." value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
             {filteredProfiles.length === 0 ? (
-              <p style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No dating profiles (API not implemented yet)</p>
+              <p style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No dating profiles found.</p>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
                 {filteredProfiles.map((p) => (
@@ -98,26 +113,26 @@ export default function Dating() {
           <div className="card-header">Dating Matches</div>
           <div className="card-body">
             {matches.length === 0 ? (
-              <p style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No matches (API not implemented yet)</p>
+              <p style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No matches yet.</p>
             ) : (
               <div className="table-wrapper">
                 <table>
                   <thead>
-                    <tr><th>User 1</th><th>User 2</th><th>Match Date</th><th>Compatibility</th><th>Status</th><th>Actions</th></tr>
+                    <tr><th>User 1</th><th>User 2</th><th>Match Date</th><th>Compatibility</th><th>Status</th></tr>
                   </thead>
                   <tbody>
-                    {matches.map((m) => (
+                    {matches.map((m) => {
+                      const score = Number(m.compatibility ?? m.score)
+                      return (
                       <tr key={m.id}>
                         <td style={{ fontWeight: 500 }}>{m.user1 || m.user1Name || 'N/A'}</td>
                         <td style={{ fontWeight: 500 }}>{m.user2 || m.user2Name || 'N/A'}</td>
-                        <td>{m.matchedAt ? new Date(m.matchedAt).toLocaleDateString() : 'N/A'}</td>
-                        <td><span style={{ fontWeight: 600, color: parseInt(m.compatibility) > 80 ? 'var(--success)' : 'var(--warning)' }}>{m.compatibility || m.score || 'N/A'}%</span></td>
-                        <td><span className={`badge ${m.status}`}>{m.status || 'active'}</span></td>
-                        <td>
-                          <button className="btn btn-outline btn-sm">View</button>
-                        </td>
+                        <td>{m.matchedAt || m.createdAt ? new Date(m.matchedAt || m.createdAt).toLocaleDateString() : 'N/A'}</td>
+                        <td><span style={{ fontWeight: 600, color: Number.isFinite(score) ? (score > 80 ? 'var(--success)' : 'var(--warning)') : 'inherit' }}>{Number.isFinite(score) ? `${score}%` : 'N/A'}</span></td>
+                        <td><span className={`badge ${String(m.status || 'active').toLowerCase()}`}>{m.status || 'active'}</span></td>
                       </tr>
-                    ))}
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

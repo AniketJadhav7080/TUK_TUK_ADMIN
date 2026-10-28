@@ -400,6 +400,7 @@ tbody tr:hover { background: rgba(10,126,164,0.04); }
 .badge.active { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; border: 1px solid rgba(6,95,70,0.1); }
 .badge.banned { background: #fee2e2; color: #991b1b; }
 .badge.inactive { background: #f3f4f6; color: #4b5563; }
+.badge.deactivated { background: #e5e7eb; color: #374151; }
 .badge.reported { background: #fef3c7; color: #92400e; }
 .badge.pending { background: #fef3c7; color: #92400e; }
 .badge.closed { background: #f3f4f6; color: #4b5563; }

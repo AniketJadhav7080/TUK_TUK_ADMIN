@@ -15,6 +15,7 @@ export default function VIPMembership() {
   const [tab, setTab] = useState('tiers')
   const [showModal, setShowModal] = useState(null)
   const [form, setForm] = useState({ level: '', xp: '' })
+  const [usingDefaults, setUsingDefaults] = useState(false)
 
   const normalizeTier = (t, idx) => ({
     _raw: t,
@@ -42,6 +43,9 @@ export default function VIPMembership() {
           else if (cfg.config) raw = cfg.config
           else if (cfg.data) raw = cfg.data
           if (Array.isArray(raw) && raw.length) setTiers(raw.map(normalizeTier))
+          else setUsingDefaults(true)
+        } else {
+          setUsingDefaults(true)
         }
         if (Array.isArray(users)) {
           setVipUsers(users.map((u) => ({
@@ -84,11 +88,17 @@ export default function VIPMembership() {
   return (
     <div>
       <div className="stats-grid">
-        <div className="stats-card"><div className="label">Total Tiers</div><div className="value">8</div></div>
-        <div className="stats-card"><div className="label">Active VIP Users</div><div className="value">{vipUsers.length.toLocaleString()}</div></div>
-        <div className="stats-card"><div className="label">Highest XP</div><div className="value">{Math.max(...tiers.map((t) => Number(t.xp) || 0)).toLocaleString()} XP</div></div>
-        <div className="stats-card"><div className="label">Validity</div><div className="value" style={{ fontSize: 20 }}>3 Months</div></div>
+        <div className="stats-card"><div className="label">Total Tiers</div><div className="value">{tiers.length}</div></div>
+        <div className="stats-card"><div className="label">Active VIP Users</div><div className="value">{vipUsers.filter((u) => String(u.status).toLowerCase() === 'active').length.toLocaleString()}</div></div>
+        <div className="stats-card"><div className="label">Highest XP</div><div className="value">{Math.max(0, ...tiers.map((t) => Number(t.xp) || 0)).toLocaleString()} XP</div></div>
+        <div className="stats-card"><div className="label">VIP Users Loaded</div><div className="value">{vipUsers.length.toLocaleString()}</div></div>
       </div>
+
+      {usingDefaults && (
+        <div className="alert alert-warning" style={{ marginBottom: 16, fontSize: 13 }}>
+          VIP tier config could not be loaded from the server — showing default values. Editing is disabled until the config loads.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {['tiers', 'users'].map((t) => (
@@ -107,7 +117,7 @@ export default function VIPMembership() {
                     <tr key={t.level}>
                       <td style={{ fontWeight: 700, color: 'var(--primary)' }}>VIP {t.level}</td>
                       <td><span className="badge active">{(Number(t.xp) || 0).toLocaleString()} XP</span></td>
-                      <td><button className="btn btn-outline btn-sm" onClick={() => openEdit(t)}>Edit</button></td>
+                      <td><button className="btn btn-outline btn-sm" onClick={() => openEdit(t)} disabled={usingDefaults}>Edit</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -142,7 +152,7 @@ export default function VIPMembership() {
             {saveError && <div style={{ padding: '8px 12px', borderRadius: 8, fontSize: 13, background: '#fee2e2', color: '#991b1b', marginBottom: 12 }}>{saveError}</div>}
             <div className="modal-actions">
               <button type="button" className="btn btn-outline" onClick={() => setShowModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save</button>
+              <button type="submit" className="btn btn-primary" disabled={usingDefaults}>Save</button>
             </div>
           </form>
         </Modal>

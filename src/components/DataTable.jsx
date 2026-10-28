@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 
 export default function DataTable({ columns, data, loading, emptyMessage = 'No data found', pageSize = 20 }) {
   const [sortKey, setSortKey] = useState(null)
@@ -21,6 +21,11 @@ export default function DataTable({ columns, data, loading, emptyMessage = 'No d
 
   const totalPages = Math.max(1, Math.ceil((sorted?.length || 0) / pageSize))
   const paged = sorted?.slice(page * pageSize, (page + 1) * pageSize) || []
+
+  // Keep the current page in range when the filtered data set shrinks.
+  useEffect(() => {
+    if (page > totalPages - 1) setPage(Math.max(0, totalPages - 1))
+  }, [page, totalPages])
 
   const handleSort = (key) => {
     if (sortKey === key) {

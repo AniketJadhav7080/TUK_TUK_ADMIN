@@ -1,9 +1,52 @@
-import { useState, useEffect } from 'react'
-import Modal from '../components/Modal'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '../services/api'
 import Loading from '../components/Loading'
+import { useToast } from '../context/ToastContext'
+
+const POLL_INTERVAL = 30 * 1000
+const POLL_MAX_DURATION = 5 * 60 * 1000
+
+async function fetchAllHistory() {
+  const data = await api.getNotificationHistory(0, 100)
+  if (Array.isArray(data)) return data
+  if (data?.content) {
+    // Paginated response: fetch every page so the full history shows
+    const all = [...data.content]
+    const totalPages = Math.min(data.totalPages || 1, 50)
+    for (let p = 1; p < totalPages; p++) {
+      const page = await api.getNotificationHistory(p, data.size || 100).catch(() => null)
+      if (page?.content) all.push(...page.content)
+    }
+    return all
+  }
+  return data?.notifications || data?.data || []
+}
+
+const formatDate = (v) => {
+  if (!v) return { date: '—', time: '—' }
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return { date: String(v), time: '—' }
+  return { date: d.toLocaleDateString(), time: d.toLocaleTimeString() }
+}
+
+const normalizeHistory = (n, idx) => {
+  const when = n.createdAt || n.sentAt || n.date || n.timestamp
+  const formatted = when ? formatDate(when) : { date: n.date || '—', time: n.time || '—' }
+  return {
+    ...n,
+    _key: n.id ?? n.jobId ?? `${idx}-${n.title || 'notification'}`,
+    type: n.type || n.notificationType || 'notification',
+    title: n.title || n.subject || '(no title)',
+    audience: n.audience || n.recipient || n.recipientType || '—',
+    status: n.status || '—',
+    date: formatted.date,
+    time: formatted.time,
+    reads: n.reads ?? n.readCount ?? n.readByCount ?? 0,
+  }
+}
 
 export default function Notifications() {
+  const { addToast } = useToast()
   const [type, setType] = useState('notification')
   const [title, setTitle] = useState('')
   const [message, setMessage] = useState('')
@@ -12,12 +55,26 @@ export default function Notifications() {
   const [image, setImage] = useState(null)
   const [schedule, setSchedule] = useState('')
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
+  const [feedback, setFeedback] = useState(null)
+  const [job, setJob] = useState(null)
   const [sendError, setSendError] = useState(null)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const pollTimer = useRef(null)
+  const mountedRef = useRef(true)
+  const sendingRef = useRef(false)
 
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (pollTimer.current) clearTimeout(pollTimer.current)
+    }
+  }, [])
+
+
+  const setHistoryList = (list) => setHistory((Array.isArray(list) ? list : []).map(normalizeHistory))
 
   useEffect(() => {
     let cancelled = false
@@ -25,13 +82,10 @@ export default function Notifications() {
       setLoading(true)
       setError(null)
       try {
-        const data = await api.getNotificationHistory().catch(() => [])
-        if (!cancelled) {
-          const list = Array.isArray(data) ? data : (data?.content || data?.notifications || [])
-          setHistory(list)
-        }
+        const list = await fetchAllHistory()
+        if (!cancelled) setHistoryList(list)
       } catch (e) {
-        if (!cancelled) setError(e.message)
+        if (!cancelled) setError(e.message || 'Failed to load history')
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -43,8 +97,51 @@ export default function Notifications() {
   const typeMap = { notification: 'ADMIN_BROADCAST', announcement: 'ADMIN_ANNOUNCEMENT', promo: 'ADMIN_PROMOTIONAL' }
   const recipientMap = { all: 'ALL_USERS', active: 'ACTIVE_USERS', vip: 'VIP_USERS', inactive: 'INACTIVE_USERS', banned: 'BANNED_USERS', specific: 'SELECTED_USERS' }
 
+  // Poll the specific job until COMPLETED/FAILED, then refresh history from the API
+  const pollJob = (jobId) => {
+    const startedAt = Date.now()
+    if (pollTimer.current) clearTimeout(pollTimer.current)
+
+    const tick = async () => {
+      let status = null
+      try { status = await api.getMassJobStatus(jobId) } catch { /* retry next tick */ }
+      if (!mountedRef.current) return
+
+      if (status && (status.status === 'COMPLETED' || status.status === 'FAILED')) {
+        setJob({ jobId, status: status.status })
+        try {
+          const list = await fetchAllHistory()
+          if (mountedRef.current) setHistoryList(list)
+        } catch { /* history refresh failed */ }
+        if (!mountedRef.current) return
+        addToast(
+          status.status === 'COMPLETED' ? 'Notification sent successfully' : (status.errorMessage || 'Notification failed'),
+          status.status === 'COMPLETED' ? 'success' : 'error'
+        )
+        setJob(null)
+        return
+      }
+
+      if (status?.status) setJob({ jobId, status: status.status })
+
+      const elapsed = Date.now() - startedAt
+      if (elapsed >= POLL_MAX_DURATION) {
+        try {
+          const list = await fetchAllHistory()
+          if (mountedRef.current) setHistoryList(list)
+        } catch { /* ignore */ }
+        if (mountedRef.current) setJob(null)
+        return
+      }
+      pollTimer.current = setTimeout(tick, Math.min(POLL_INTERVAL, POLL_MAX_DURATION - elapsed))
+    }
+    tick()
+  }
+
   const handleSend = async (e) => {
     e.preventDefault()
+    if (sendingRef.current) return
+    sendingRef.current = true
     setSending(true)
     setSendError(null)
     try {
@@ -56,44 +153,47 @@ export default function Notifications() {
       const payload = { title, body: message, recipient, type: apiType }
       if (recipient === 'SELECTED_USERS') payload.userIds = [specificUserId.trim()]
       else if (schedule) payload.schedule = schedule
+      const wasScheduled = !!schedule
+      let response
       if (recipient === 'SELECTED_USERS') {
-        await api.sendNotification({ ...payload, image })
-      } else if (type === 'notification') {
-        await api.sendMassNotification(payload, image)
+        response = await api.sendNotification({ ...payload, image })
       } else {
-        await api.sendMassNotification(payload, image)
+        response = await api.sendMassNotification(payload, image)
       }
-      setSent(true)
+
       setTitle('')
       setMessage('')
       setImage(null)
       setSchedule('')
-      setHistory((prev) => [
-        {
-          id: Date.now().toString(),
-          type,
-          title,
-          audience,
-          status: schedule ? 'scheduled' : 'sent',
-          date: new Date().toLocaleDateString(),
-          time: new Date().toLocaleTimeString(),
-          reads: 0,
-        },
-        ...prev,
-      ])
-      setTimeout(() => setSent(false), 3000)
+
+      if (response?.jobId && !wasScheduled) {
+        // Async job (202 + jobId): show queued chip, refresh once, then poll status
+        setJob({ jobId: response.jobId, status: response.status || 'QUEUED' })
+        fetchAllHistory().then((list) => { if (mountedRef.current) setHistoryList(list) }).catch(() => {})
+        pollJob(response.jobId)
+      } else {
+        // Scheduled send or older backend without jobId
+        setFeedback(wasScheduled ? 'Scheduled!' : 'Sent successfully!')
+        fetchAllHistory().then((list) => { if (mountedRef.current) setHistoryList(list) }).catch(() => {})
+        setTimeout(() => { if (mountedRef.current) setFeedback(null) }, 3000)
+      }
     } catch (err) {
       setSendError(err.message || 'Failed to send notification')
     } finally {
+      sendingRef.current = false
       setSending(false)
     }
   }
 
   if (loading) return <Loading text="Loading notifications..." />
-  if (error) return <div className="alert alert-error">Failed to load history: {error}</div>
 
   return (
     <div>
+      {error && (
+        <div className="alert alert-warning" style={{ marginBottom: 16 }}>
+          Could not load notification history: {error}. You can still send notifications below.
+        </div>
+      )}
       {sendError && (
         <div className="alert alert-error" style={{ marginBottom: 16 }}>✗ {sendError}</div>
       )}
@@ -159,7 +259,12 @@ export default function Notifications() {
               <button type="submit" className="btn btn-primary" disabled={sending}>
                 {sending ? 'Sending...' : schedule ? 'Schedule' : 'Send Now'}
               </button>
-              {sent && <span style={{ color: 'var(--success)', fontSize: 13 }}>✓ {schedule ? 'Scheduled!' : 'Sent successfully!'}</span>}
+              {feedback && <span style={{ color: 'var(--success)', fontSize: 13 }}>✓ {feedback}</span>}
+              {job && (
+                <span className={`badge ${job.status === 'FAILED' ? 'banned' : 'reported'}`} style={{ textTransform: 'capitalize' }}>
+                  Job #{job.jobId}: {String(job.status || 'QUEUED').toLowerCase()}
+                </span>
+              )}
             </div>
           </form>
         </div>
@@ -183,16 +288,19 @@ export default function Notifications() {
               </thead>
               <tbody>
                 {history.map((n) => (
-                  <tr key={n.id}>
+                  <tr key={n._key}>
                     <td><span className="badge reported" style={{ textTransform: 'capitalize' }}>{n.type}</span></td>
                     <td style={{ fontWeight: 500 }}>{n.title}</td>
                     <td>{n.audience}</td>
-                    <td><span className={`badge ${n.status}`}>{n.status}</span></td>
-                    <td>{n.date || '-'}</td>
-                    <td>{n.time || '-'}</td>
-                    <td>{(n.reads ?? 0).toLocaleString()}</td>
+                    <td><span className={`badge ${String(n.status).toLowerCase()}`}>{n.status}</span></td>
+                    <td>{n.date}</td>
+                    <td>{n.time}</td>
+                    <td>{Number(n.reads || 0).toLocaleString()}</td>
                   </tr>
                 ))}
+                {history.length === 0 && (
+                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No notifications sent yet.</td></tr>
+                )}
               </tbody>
             </table>
           </div>

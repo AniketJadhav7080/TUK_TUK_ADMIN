@@ -4,7 +4,7 @@ import { useToast } from '../context/ToastContext'
 import { ROLES } from '../permissions'
 import { ASIAN_COUNTRIES, ARABIC_COUNTRIES } from '../data/countries'
 import Modal from '../components/Modal'
-import { api } from '../services/api'
+import { api, resolveAssetUrl } from '../services/api'
 import { LoadingState, ErrorState } from '../components/SkeletonLoader'
 
 const roleColors = {
@@ -28,6 +28,10 @@ const roleLabels = {
   agency: 'Agency',
   host: 'Host',
 }
+
+const normRole = (r) => String(r || '').toLowerCase()
+const roleColor = (r) => roleColors[normRole(r)] || '#6b7280'
+const roleLabel = (r) => roleLabels[normRole(r)] || r
 
 const assignableRoles = [ROLES.SUPER_ADMIN, ROLES.MODERATOR, ROLES.SUPPORT, ROLES.DIAMOND_STOCK, ROLES.AGENCY, ROLES.HOST]
 
@@ -102,7 +106,7 @@ export default function Admins() {
     else if (form.password.length < 6) errors.password = 'Min 6 characters'
     if (!form.country) errors.country = 'Country is required'
     if (form.role === ROLES.SUPER_ADMIN) {
-      const existing = admins.find((a) => a.role === ROLES.SUPER_ADMIN && a.country === form.country)
+      const existing = admins.find((a) => normRole(a.role) === ROLES.SUPER_ADMIN && String(a.country || '').toLowerCase() === form.country.toLowerCase())
       if (existing) errors.country = `Super Admin already exists for ${form.country}`
     }
     setFormErrors(errors)
@@ -119,7 +123,12 @@ export default function Admins() {
       setFormErrors({})
       setShowModal(false)
       addToast('Admin created successfully', 'success')
-    } catch {
+    } catch (err) {
+      // Only try the legacy endpoint when the primary one is absent.
+      if (err?.status !== 404 && err?.status !== 405) {
+        addToast(err?.message || 'Failed to create admin', 'error')
+        return
+      }
       try {
         await api.addAdmin({ ...form })
         await reloadAdmins()
@@ -127,8 +136,8 @@ export default function Admins() {
         setFormErrors({})
         setShowModal(false)
         addToast('Admin created successfully', 'success')
-      } catch {
-        addToast('Failed to create admin', 'error')
+      } catch (err2) {
+        addToast(err2?.message || 'Failed to create admin', 'error')
       }
     }
   }
@@ -154,14 +163,13 @@ export default function Admins() {
       addToast('Admin removed successfully', 'success')
     } catch {
       addToast('Failed to remove admin', 'error')
-      setDeleteModal(null)
     }
   }
 
   if (loading) return <div className="page-container"><LoadingState /></div>
   if (error && admins.length === 0) return <div className="page-container"><ErrorState message={error} onRetry={() => window.location.reload()} /></div>
 
-  const displayAdmins = admins.filter((a) => isOwner || a.role !== ROLES.OWNER)
+  const displayAdmins = admins.filter((a) => isOwner || normRole(a.role) !== ROLES.OWNER)
 
   return (
     <div className="page-container">
@@ -195,27 +203,27 @@ export default function Admins() {
               <tbody>
                 {displayAdmins.map((a) => (
                   <tr key={a.id}>
-                    <td>{a.adminId}</td>
+                    <td>{a.adminId ?? a.id ?? '-'}</td>
                     <td className="cell-user">
                       <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
                         <span style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44 }}>
-                          <span className="avatar" style={{ background: roleColors[a.role] || '#6b7280', width: 28, height: 28, fontSize: 12 }}>{getDisplayName(a).charAt(0).toUpperCase()}</span>
-                          {decoMap[a.id]?.frameUrl && <img src={decoMap[a.id].frameUrl} alt="" title={decoMap[a.id].frame || 'Frame'} style={{ position: 'absolute', inset: 0, width: 44, height: 44, objectFit: 'contain', pointerEvents: 'none' }} />}
+                          <span className="avatar" style={{ background: roleColor(a.role), width: 28, height: 28, fontSize: 12 }}>{getDisplayName(a).charAt(0).toUpperCase()}</span>
+                          {decoMap[a.id]?.frameUrl && <img src={resolveAssetUrl(decoMap[a.id].frameUrl)} alt="" title={decoMap[a.id].frame || 'Frame'} style={{ position: 'absolute', inset: 0, width: 44, height: 44, objectFit: 'contain', pointerEvents: 'none' }} onError={(e) => { e.currentTarget.style.display = 'none' }} />}
                         </span>
                         {decoMap[a.id]?.badgeUrl && (
-                          <img src={decoMap[a.id].badgeUrl} alt="" title={decoMap[a.id].badge || 'Badge'} style={{ marginTop: 2, height: 16, objectFit: 'contain' }} />
+                          <img src={resolveAssetUrl(decoMap[a.id].badgeUrl)} alt="" title={decoMap[a.id].badge || 'Badge'} style={{ marginTop: 2, height: 16, objectFit: 'contain' }} onError={(e) => { e.currentTarget.style.display = 'none' }} />
                         )}
                       </span>
                       {getDisplayName(a)}
                     </td>
                     <td>{a.email}</td>
-                    <td><span className="role-badge" style={{ background: roleColors[a.role] || '#6b7280' }}>{roleLabels[a.role] || a.role}</span></td>
+                    <td><span className="role-badge" style={{ background: roleColor(a.role) }}>{roleLabel(a.role)}</span></td>
                     <td>{a.country || '-'}</td>
                     <td className="cell-perms">
-                      {a.role === ROLES.OWNER ? 'All permissions (owner)' : a.role === ROLES.SUPER_ADMIN ? 'All permissions except owner-only' : a.role === ROLES.MODERATOR ? 'Users, Rooms, Reports, Notifications' : a.role === ROLES.SUPPORT ? 'View users, reports, notifications' : 'Role-specific permissions'}
+                      {normRole(a.role) === ROLES.OWNER ? 'All permissions (owner)' : normRole(a.role) === ROLES.SUPER_ADMIN ? 'All permissions except owner-only' : normRole(a.role) === ROLES.MODERATOR ? 'Users, Rooms, Reports, Notifications' : normRole(a.role) === ROLES.SUPPORT ? 'View users, reports, notifications' : 'Role-specific permissions'}
                     </td>
                     <td>
-                      {(isOwner && a.role !== ROLES.OWNER) && (
+                      {(isOwner && normRole(a.role) !== ROLES.OWNER) && (
                         <div className="actions">
                           <button className="btn btn-danger-outline btn-sm" onClick={() => setDeleteModal(a)}>Remove</button>
                         </div>
@@ -251,7 +259,7 @@ export default function Admins() {
               <label>Role</label>
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, country: '' })} className="input-select">
                 {assignableRoles.map((r) => (
-                  <option key={r} value={r}>{roleLabels[r] || r}</option>
+                  <option key={r} value={r}>{roleLabels[normRole(r)] || r}</option>
                 ))}
               </select>
             </div>

@@ -16,42 +16,80 @@ export default function Users() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [banModal, setBanModal] = useState(null)
+  const [resetModal, setResetModal] = useState(null)
+  const [resetting, setResetting] = useState(false)
+  const [deviceModal, setDeviceModal] = useState(null)
+  const [devices, setDevices] = useState([])
+  const [devicesLoading, setDevicesLoading] = useState(false)
   const [editModal, setEditModal] = useState(null)
   const [editForm, setEditForm] = useState({})
 
-  useEffect(() => {
-    const fetchUsers = async () => {
-      setLoading(true)
-      try {
-        const allUsers = []
-        const firstPage = await api.getUsers('?page=0&size=1000')
+  const refreshUsers = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const allUsers = []
+      const firstPage = await api.getUsers('?page=0&size=1000')
 
-        if (Array.isArray(firstPage)) {
-          setUsers(firstPage)
-        } else if (firstPage?.content) {
-          allUsers.push(...firstPage.content)
-          const totalPages = firstPage.totalPages || 1
-          for (let p = 1; p < totalPages; p++) {
-            const page = await api.getUsers(`?page=${p}&size=1000`)
-            if (page?.content) allUsers.push(...page.content)
-          }
-          setUsers(allUsers)
-        } else if (firstPage?.users) setUsers(firstPage.users)
-        else if (firstPage?.data) setUsers(firstPage.data)
-      } catch (err) {
-        console.error('getUsers failed:', err)
-        setError(`Failed to load users from server: ${err.message || err}`)
-      } finally {
-        setLoading(false)
-      }
+      if (Array.isArray(firstPage)) {
+        setUsers(firstPage)
+      } else if (firstPage?.content) {
+        allUsers.push(...firstPage.content)
+        const totalPages = Math.min(firstPage.totalPages || 1, 100)
+        for (let p = 1; p < totalPages; p++) {
+          const page = await api.getUsers(`?page=${p}&size=1000`)
+          if (page?.content) allUsers.push(...page.content)
+        }
+        setUsers(allUsers)
+      } else if (firstPage?.users) setUsers(firstPage.users)
+      else if (firstPage?.data) setUsers(firstPage.data)
+    } catch (err) {
+      console.error('getUsers failed:', err)
+      setError(`Failed to load users from server: ${err.message || err}`)
+    } finally {
+      setLoading(false)
     }
-    fetchUsers()
-  }, [])
+  }
+
+  useEffect(() => { refreshUsers() }, [])
 
   const canBan = hasPermission(user, PERMISSIONS.BAN_USERS)
   const canEdit = hasPermission(user, PERMISSIONS.EDIT_USERS)
   const canVerifyVip = hasPermission(user, PERMISSIONS.VERIFY_VIP)
 
+  // Display rules (backend sets status itself from next update):
+  // banned=true forces BANNED; self-deleted (soft) user shows as DEACTIVATED
+  const isDeactivated = (u) => u && (u.deleted === true || u.deactivated === true || u.status === 'deleted' || u.status === 'deactivated')
+  const effStatus = (u) => {
+    if (!u) return u?.status
+    if (u.banned) return 'banned'
+    if (isDeactivated(u)) return 'deactivated'
+    return u.status
+  }
+
+  const handleResetDiamonds = async (u) => {
+    setResetting(true)
+    try {
+      await api.resetUserDiamonds(u.id)
+      setUsers((prev) => prev.map((x) => x.id === u.id ? { ...x, diamonds: 0 } : x))
+      addToast('Diamonds reset to 0', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to reset diamonds', 'error')
+    } finally {
+      setResetting(false)
+      setResetModal(null)
+    }
+  }
+
+  const handleReactivate = async (u) => {
+    try {
+      await api.reactivateUser(u.id)
+      setUsers((prev) => prev.map((x) => x.id === u.id ? { ...x, deleted: false, deactivated: false, status: 'active' } : x))
+      addToast('User reactivated', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to reactivate user', 'error')
+    }
+  }
   const [banReason, setBanReason] = useState('')
   const openBan = (u) => {
     setBanReason('')
@@ -59,15 +97,47 @@ export default function Users() {
   }
 
   const handleBan = async (u) => {
-    const banning = u.status !== 'banned'
+    const banning = effStatus(u) !== 'banned'
     try {
       await api.updateUserStatus(u.id, { status: banning ? 'banned' : 'active', banReason: banning ? (banReason.trim() || undefined) : undefined })
-      setUsers((prev) => prev.map((x) => x.id === u.id ? { ...x, status: banning ? 'banned' : 'active' } : x))
+      setUsers((prev) => prev.map((x) => x.id === u.id ? { ...x, status: banning ? 'banned' : 'active', banned: banning } : x))
       setBanModal(null)
       addToast(banning ? 'User banned' : 'User unbanned', 'success')
-    } catch {
-      addToast('Failed to update user status', 'error')
-      setBanModal(null)
+    } catch (err) {
+      addToast(err?.message || 'Failed to update user status', 'error')
+    }
+  }
+
+  const openDevices = async (u) => {
+    setDeviceModal(u)
+    setDevices([])
+    setDevicesLoading(true)
+    try {
+      const res = await api.getUserDevices(u.id)
+      const list = Array.isArray(res) ? res : (res?.content || res?.devices || res?.data || [])
+      setDevices(list)
+    } catch (err) {
+      addToast(err?.message || 'Failed to load devices', 'error')
+    } finally {
+      setDevicesLoading(false)
+    }
+  }
+
+  const deviceKey = (d) => d.deviceId || d.id
+
+  const toggleDeviceBlock = async (d) => {
+    const key = deviceKey(d)
+    if (!key) {
+      addToast('Device ID is missing for this record', 'error')
+      return
+    }
+    try {
+      if (d.blocked) await api.unblockDevice(key)
+      else await api.blockDevice(key)
+      setDevices((prev) => prev.map((x) => deviceKey(x) === key ? { ...x, blocked: !d.blocked } : x))
+      addToast(d.blocked ? 'Device unblocked' : 'Device blocked', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to update device', 'error')
     }
   }
 
@@ -85,9 +155,8 @@ export default function Users() {
       setUsers((prev) => prev.map((x) => x.id === editModal.id ? { ...x, ...localPayload } : x))
       setEditModal(null)
       addToast('User updated successfully', 'success')
-    } catch {
-      addToast('Failed to update user', 'error')
-      setEditModal(null)
+    } catch (err) {
+      addToast(err?.message || 'Failed to update user', 'error')
     }
   }
 
@@ -135,23 +204,32 @@ export default function Users() {
     reader.readAsDataURL(file)
   }
 
-  const filtered = users.filter((u) =>
-    String(u.id).includes(search) ||
-    (u.name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (u.email || '').toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = users.filter((u) => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return String(u.id).toLowerCase().includes(q) ||
+      (u.name || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q)
+  })
 
   const columns = [
     { key: 'id', label: 'ID', render: (u) => <span style={{ fontFamily: 'monospace', fontSize: 13, color: 'var(--text-light)' }}>{u.id}</span> },
     { key: 'name', label: 'Name', render: (u) => <Link to={`/users/${u.id}`} style={{ color: 'var(--primary)', fontWeight: 500 }}>{u.name}</Link> },
     { key: 'email', label: 'Email', sortable: false },
-    { key: 'status', label: 'Status', render: (u) => <span className={`badge ${u.status}`}>{u.status}</span> },
+    { key: 'status', label: 'Status', render: (u) => <span className={`badge ${effStatus(u)}`}>{effStatus(u)}</span> },
     { key: 'vip', label: 'VIP', render: (u) => u.vip ? <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>VIP</span> : '-' },
-    { key: 'device', label: 'Device', render: (u) => <span style={{ fontSize: 13 }}>{u.device || '-'}</span> },
-    { key: 'ip', label: 'IP', render: (u) => <span style={{ fontSize: 13, fontFamily: 'monospace' }}>{u.ip || '-'}</span> },
-    { key: 'country', label: 'Country' },
-    { key: 'rooms', label: 'Rooms' },
-    { key: 'reports', label: 'Reports' },
+    { key: 'device', label: 'Device', render: (u) => <span style={{ fontSize: 13 }}>{u.deviceModel || u.device || '-'}</span> },
+    { key: 'ip', label: 'IP', render: (u) => <span style={{ fontSize: 13, fontFamily: 'monospace' }}>{u.deviceIpAddress || u.ip || '-'}</span> },
+    { key: 'country', label: 'Country', render: (u) => <span style={{ fontSize: 13 }}>{u.countryName || u.country || u.countryCode || '-'}</span> },
+    { key: 'rooms', label: 'Rooms', render: (u) => <span style={{ fontSize: 13 }}>{u.roomsJoinTillNow ?? u.roomsJoined ?? u.totalRooms ?? u.rooms ?? '-'}</span> },
+    { key: 'diamonds', label: 'Diamonds', render: (u) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontWeight: 600 }}>{(u.diamonds ?? 0).toLocaleString()}</span>
+        {isOwner && (
+          <button className="btn btn-outline btn-sm" onClick={() => setResetModal(u)} title="Reset diamonds to 0">Reset</button>
+        )}
+      </div>
+    )},
     { key: 'actions', label: 'Actions', sortable: false, render: (u) => (
       <div className="actions">
         <Link to={`/users/${u.id}`} className="btn btn-primary btn-sm">View</Link>
@@ -161,17 +239,23 @@ export default function Users() {
             {u.vip ? 'Un-VIP' : 'VIP'}
           </button>
         )}
-        {canBan && (
-          <button className={`btn btn-sm ${u.status === 'banned' ? 'btn-success' : 'btn-warning'}`} onClick={() => openBan(u)}>
-            {u.status === 'banned' ? 'Unban' : 'Ban'}
+        {canBan && !isDeactivated(u) && (
+          <button className={`btn btn-sm ${effStatus(u) === 'banned' ? 'btn-success' : 'btn-warning'}`} onClick={() => openBan(u)}>
+            {effStatus(u) === 'banned' ? 'Unban' : 'Ban'}
           </button>
+        )}
+        {canBan && isDeactivated(u) && (
+          <button className="btn btn-success btn-sm" onClick={() => handleReactivate(u)}>Reactivate</button>
+        )}
+        {canBan && (
+          <button className="btn btn-outline btn-sm" onClick={() => openDevices(u)}>Device Lock</button>
         )}
       </div>
     )},
   ]
 
   if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />
+  if (error) return <ErrorState message={error} onRetry={refreshUsers} />
 
   return (
     <div>
@@ -186,9 +270,9 @@ export default function Users() {
       </div>
 
       {banModal && (
-        <Modal title={banModal.status === 'banned' ? 'Unban User' : 'Ban User'} onClose={() => setBanModal(null)}>
-          <p>Are you sure you want to {banModal.status === 'banned' ? 'unban' : 'ban'} <strong>{banModal.name}</strong>?</p>
-          {banModal.status !== 'banned' && (
+        <Modal title={effStatus(banModal) === 'banned' ? 'Unban User' : 'Ban User'} onClose={() => setBanModal(null)}>
+          <p>Are you sure you want to {effStatus(banModal) === 'banned' ? 'unban' : 'ban'} <strong>{banModal.name}</strong>?</p>
+          {effStatus(banModal) !== 'banned' && (
             <div className="form-group" style={{ marginTop: 12 }}>
               <label>Ban Reason (optional)</label>
               <input value={banReason} onChange={(e) => setBanReason(e.target.value)} placeholder="e.g. spam, abuse..." />
@@ -196,9 +280,64 @@ export default function Users() {
           )}
           <div className="modal-actions">
             <button className="btn btn-outline" onClick={() => setBanModal(null)}>Cancel</button>
-            <button className={`btn ${banModal.status === 'banned' ? 'btn-success' : 'btn-danger'}`} onClick={() => handleBan(banModal)}>
-              {banModal.status === 'banned' ? 'Unban' : 'Ban'}
+            <button className={`btn ${effStatus(banModal) === 'banned' ? 'btn-success' : 'btn-danger'}`} onClick={() => handleBan(banModal)}>
+              {effStatus(banModal) === 'banned' ? 'Unban' : 'Ban'}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {resetModal && (
+        <Modal title="Reset Diamonds" onClose={() => setResetModal(null)}>
+          <p>Are you sure you want to reset diamonds for <strong>{resetModal.name}</strong> (ID: {resetModal.id})?</p>
+          <p style={{ fontSize: 13, color: 'var(--text-light)', marginTop: 8 }}>
+            Current diamonds: <strong>{(resetModal.diamonds ?? 0).toLocaleString()}</strong> — this will set them to <strong>0</strong>. This action cannot be undone.
+          </p>
+          <div className="modal-actions">
+            <button className="btn btn-outline" onClick={() => setResetModal(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick={() => handleResetDiamonds(resetModal)} disabled={resetting}>
+              {resetting ? 'Resetting...' : 'Reset to 0'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {deviceModal && (
+        <Modal wide title={`Device Lock: ${deviceModal.name}`} onClose={() => setDeviceModal(null)}>
+          {devicesLoading ? (
+            <LoadingState />
+          ) : devices.length === 0 ? (
+            <p style={{ color: 'var(--text-light)', textAlign: 'center', padding: 20 }}>No devices found for this user</p>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr><th>Device</th><th>OS</th><th>IP</th><th>Last Login</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {devices.map((d) => (
+                    <tr key={deviceKey(d)}>
+                      <td>
+                        <div style={{ fontWeight: 500 }}>{d.deviceModel || '-'}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-light)', fontFamily: 'monospace' }}>{deviceKey(d) || '-'}</div>
+                      </td>
+                      <td style={{ fontSize: 13 }}>{d.osType ? `${d.osType} ${d.osVersion || ''}` : '-'}</td>
+                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.ipAddress || '-'}</td>
+                      <td style={{ fontSize: 12 }}>{d.lastLoginAt ? new Date(d.lastLoginAt).toLocaleString() : '-'}</td>
+                      <td><span className={`badge ${d.blocked ? 'banned' : 'active'}`}>{d.blocked ? 'Blocked' : 'Active'}</span></td>
+                      <td>
+                        <button className={`btn btn-sm ${d.blocked ? 'btn-success' : 'btn-danger'}`} onClick={() => toggleDeviceBlock(d)}>
+                          {d.blocked ? 'Unblock' : 'Block'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="modal-actions">
+            <button className="btn btn-outline" onClick={() => setDeviceModal(null)}>Close</button>
           </div>
         </Modal>
       )}

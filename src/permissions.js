@@ -283,7 +283,11 @@ export function canAccessRoute(user, route) {
     '/official/moderators': PERMISSIONS.MANAGE_MODERATORS,
     '/official/support': PERMISSIONS.MANAGE_SUPPORT_STAFF,
   }
-  const key = Object.keys(routeMap).find((k) => route.startsWith(k))
+  // Match the most specific route: exact match, or a path segment prefix
+  // (so "/users/123" matches "/users" and "/official/moderators" wins over "/official").
+  const key = Object.keys(routeMap)
+    .filter((k) => k === '/' ? route === '/' : route === k || route.startsWith(k.endsWith('/') ? k : `${k}/`))
+    .sort((a, b) => b.length - a.length)[0]
   if (!key) return true
   const perm = routeMap[key]
   if (Array.isArray(perm)) return perm.some((p) => hasPermission(user, p))

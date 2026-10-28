@@ -1,54 +1,70 @@
 import { useState, useEffect } from 'react'
+import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
+import { hasPermission, PERMISSIONS } from '../permissions'
 import Modal from '../components/Modal'
 import { LoadingState, ErrorState } from '../components/SkeletonLoader'
 import { api } from '../services/api'
 
+const nameOf = (v) => {
+  if (v == null) return '—'
+  if (typeof v === 'object') return v.name || v.username || v.email || v.id || '—'
+  return v
+}
+const formatDate = (v) => {
+  if (!v) return '—'
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString()
+}
+
 export default function Reports() {
+  const { user } = useAuth()
   const { addToast } = useToast()
   const [reports, setReports] = useState([])
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [resolveModal, setResolveModal] = useState(null)
+  const canResolve = hasPermission(user, PERMISSIONS.RESOLVE_REPORTS)
 
-  const fetchReports = (statusFilter) => {
+  const fetchReports = async () => {
     setLoading(true)
     setError('')
-    const status = statusFilter === 'all' ? '' : statusFilter.toUpperCase()
-    api.getReports({ status, page: 0 })
-      .then((data) => {
-        if (Array.isArray(data)) setReports(data)
-        else if (data?.content) setReports(data.content)
-        else if (data?.reports) setReports(data.reports)
-        else if (data?.data) setReports(data.data)
-        else setReports([])
-      })
-      .catch((err) => setError(err?.message || 'Failed to load reports'))
-      .finally(() => setLoading(false))
+    try {
+      const data = await api.getReports({ page: 0, size: 500 })
+      if (Array.isArray(data)) setReports(data)
+      else if (data?.content) setReports(data.content)
+      else if (data?.reports) setReports(data.reports)
+      else if (data?.data) setReports(data.data)
+      else setReports([])
+    } catch (err) {
+      setError(err?.message || 'Failed to load reports')
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
-    fetchReports(filter)
-  }, [filter])
+    fetchReports()
+  }, [])
 
   const handleResolve = async (report) => {
     try {
       await api.resolveReport(report.id, { status: 'RESOLVED' })
+      setReports((prev) => prev.map((r) => r.id === report.id ? { ...r, status: 'RESOLVED' } : r))
       setResolveModal(null)
-      fetchReports(filter)
       addToast('Report resolved successfully', 'success')
-    } catch {
-      addToast('Failed to resolve report', 'error')
-      setResolveModal(null)
+    } catch (err) {
+      addToast(err?.message || 'Failed to resolve report', 'error')
     }
   }
 
-  const filtered = reports.filter((r) => filter === 'all' || r.status?.toLowerCase() === filter)
-  const pendingCount = reports.filter((r) => r.status?.toLowerCase() === 'pending').length
+  const filtered = reports.filter((r) => filter === 'all' || (r.status || '').toLowerCase() === filter)
+  const pendingCount = reports.filter((r) => (r.status || '').toLowerCase() === 'pending').length
+  const resolvedCount = reports.filter((r) => (r.status || '').toLowerCase() === 'resolved').length
 
   if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={() => fetchReports(filter)} />
+  if (error) return <ErrorState message={error} onRetry={fetchReports} />
 
   return (
     <div className="page-container">
@@ -63,7 +79,7 @@ export default function Reports() {
         </div>
         <div className="stats-card">
           <div className="label">Resolved</div>
-          <div className="value" style={{ color: 'var(--success)' }}>{reports.length - pendingCount}</div>
+          <div className="value" style={{ color: 'var(--success)' }}>{resolvedCount}</div>
         </div>
       </div>
       <div className="card">
@@ -94,17 +110,17 @@ export default function Reports() {
               <tbody>
                 {filtered.map((r) => (
                   <tr key={r.id}>
-                    <td>{r.reporter}</td>
-                    <td style={{ fontWeight: 500 }}>{r.reported || r.reportedUserId || r.targetUserId || r.targetUser || '—'}</td>
-                    <td><span className="badge reported">{r.reason}</span></td>
-                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.detail}</td>
+                    <td>{nameOf(r.reporter || r.reporterName || r.reporterId)}</td>
+                    <td style={{ fontWeight: 500 }}>{nameOf(r.reported || r.reportedUser || r.reportedUserId || r.targetUserId || r.targetUser)}</td>
+                    <td><span className="badge reported">{r.reason || '—'}</span></td>
+                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.detail || r.description || '—'}</td>
                     <td>{r.room || r.roomName || r.roomId || '—'}</td>
-                    <td>{r.date}</td>
-                    <td><span className={`badge ${r.status}`}>{r.status}</span></td>
+                    <td>{formatDate(r.date || r.createdAt)}</td>
+                    <td><span className={`badge ${(r.status || '').toLowerCase()}`}>{r.status}</span></td>
                     <td>
-                      {r.status?.toLowerCase() === 'pending' && (
+                      {canResolve && (r.status || '').toLowerCase() === 'pending' ? (
                         <button className="btn btn-success btn-sm" onClick={() => setResolveModal(r)}>Resolve</button>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -115,9 +131,9 @@ export default function Reports() {
       </div>
       {resolveModal && (
         <Modal title="Resolve Report" onClose={() => setResolveModal(null)}>
-          <p>Mark this report against <strong>{resolveModal.reported || resolveModal.reportedUserId || resolveModal.targetUserId || 'User'}</strong> as resolved?</p>
+          <p>Mark this report against <strong>{nameOf(resolveModal.reported || resolveModal.reportedUser || resolveModal.reportedUserId || resolveModal.targetUserId || 'User')}</strong> as resolved?</p>
           <p style={{ fontSize: 13, color: 'var(--text-light)', marginTop: 8 }}>
-            Reason: {resolveModal.reason} — {resolveModal.detail}
+            Reason: {resolveModal.reason || '—'} — {resolveModal.detail || resolveModal.description || ''}
           </p>
           <div className="modal-actions">
             <button className="btn btn-outline" onClick={() => setResolveModal(null)}>Cancel</button>

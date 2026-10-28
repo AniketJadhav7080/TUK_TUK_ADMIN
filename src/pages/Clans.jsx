@@ -11,7 +11,10 @@ export default function Clans() {
   const [tab, setTab] = useState('all')
   const [showCreate, setShowCreate] = useState(false)
   const [showManage, setShowManage] = useState(null)
+  const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ name: '', tag: '', description: '', maxMembers: 50, icon: '' })
+
+  const statusOf = (c) => String(c?.status || 'active').toLowerCase()
 
   useEffect(() => {
     let cancelled = false
@@ -31,31 +34,52 @@ export default function Clans() {
   }, [])
 
   const filtered = clans.filter((c) => {
-    const match = (c.name || '').toLowerCase().includes(search.toLowerCase()) || (c.tag || '').toLowerCase().includes(search.toLowerCase())
+    const q = search.trim().toLowerCase()
+    const match = !q || (c.name || '').toLowerCase().includes(q) || (c.tag || '').toLowerCase().includes(q)
     if (tab === 'all') return match
-    return match && c.status === tab
+    return match && statusOf(c) === tab
   })
 
   const handleCreate = async (e) => {
     e.preventDefault()
+    setSaving(true)
+    setError('')
     try {
       const created = await api.createClan(form)
-      setClans((prev) => [{ ...created, members: created.members || 0, status: 'active' }, ...prev])
+      if (!created) throw new Error('Server did not return the created clan')
+      setClans((prev) => [{ ...created, members: created.members || 0, status: created.status || 'active' }, ...prev])
       setShowCreate(false)
       setForm({ name: '', tag: '', description: '', maxMembers: 50, icon: '' })
     } catch (e) {
-      setError(e.message)
+      setError(e.message || 'Failed to create clan')
+    } finally {
+      setSaving(false)
     }
   }
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (clan) => {
+    if (!window.confirm(`Delete clan "${clan.name}"? This cannot be undone.`)) return
+    setError('')
     try {
-      await api.deleteClan(id)
-      setClans((prev) => prev.filter((c) => c.id !== id))
+      await api.deleteClan(clan.id)
+      setClans((prev) => prev.filter((c) => c.id !== clan.id))
+      setShowManage(null)
     } catch (e) {
-      setError(e.message)
+      setError(e.message || 'Failed to delete clan')
     }
-    setShowManage(null)
+  }
+
+  const handleKick = async (clan, member) => {
+    if (!window.confirm(`Remove ${member.name || member.username || 'this member'} from the clan?`)) return
+    setError('')
+    try {
+      await api.removeClanMember(clan.id, member.id)
+      const next = { ...clan, membersList: (clan.membersList || []).filter((x) => x.id !== member.id) }
+      setShowManage(next)
+      setClans((prev) => prev.map((c) => c.id === clan.id ? { ...c, ...next } : c))
+    } catch (e) {
+      setError(e.message || 'Failed to remove clan member')
+    }
   }
 
   if (loading) return <Loading text="Loading clans..." />
@@ -65,7 +89,7 @@ export default function Clans() {
       {error && <div className="alert alert-warning" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="stats-grid">
         <div className="stats-card"><div className="label">Total Clans</div><div className="value">{clans.length}</div></div>
-        <div className="stats-card"><div className="label">Active</div><div className="value" style={{ color: 'var(--success)' }}>{clans.filter((c) => c.status === 'active').length}</div></div>
+        <div className="stats-card"><div className="label">Active</div><div className="value" style={{ color: 'var(--success)' }}>{clans.filter((c) => statusOf(c) === 'active').length}</div></div>
         <div className="stats-card"><div className="label">Total Members</div><div className="value">{clans.reduce((s, c) => s + (c.members || c.memberCount || 0), 0)}</div></div>
         <div className="stats-card"><div className="label">Avg Members</div><div className="value">{clans.length > 0 ? Math.round(clans.reduce((s, c) => s + (c.members || c.memberCount || 0), 0) / clans.length) : 0}</div></div>
       </div>
@@ -86,11 +110,11 @@ export default function Clans() {
             <input placeholder="Search clans by name or tag..." value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           {filtered.length === 0 ? (
-            <p style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No clans found (API not implemented yet)</p>
+            <p style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>{error ? 'Could not load clans.' : 'No clans found.'}</p>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
               {filtered.map((c) => (
-                <div key={c.id} className="card" style={{ border: `1px solid ${c.status === 'active' ? 'var(--success)' : 'var(--border)'}`, margin: 0 }}>
+                <div key={c.id} className="card" style={{ border: `1px solid ${statusOf(c) === 'active' ? 'var(--success)' : 'var(--border)'}`, margin: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                     <div style={{ width: 48, height: 48, borderRadius: 12, background: c.color || 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, color: '#fff' }}>
                       {c.icon || c.name?.charAt(0) || '#'}
@@ -99,12 +123,12 @@ export default function Clans() {
                       <div style={{ fontWeight: 600, fontSize: 15 }}>{c.name}</div>
                       <div style={{ fontSize: 12, color: 'var(--text-light)' }}>Tag: {c.tag || 'N/A'} · {c.members || c.memberCount || 0}/{c.maxMembers || 50} members</div>
                     </div>
-                    <span className={`badge ${c.status}`}>{c.status}</span>
+                    <span className={`badge ${statusOf(c)}`}>{statusOf(c)}</span>
                   </div>
                   <p style={{ fontSize: 13, color: 'var(--text-light)', margin: '0 0 12px', minHeight: 20 }}>{c.description || 'No description'}</p>
                   <div style={{ display: 'flex', gap: 8, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
                     <button className="btn btn-outline btn-sm" onClick={() => setShowManage(c)}>Manage</button>
-                    <button className="btn btn-danger-outline btn-sm" onClick={() => handleDelete(c.id)}>Delete</button>
+                    <button className="btn btn-danger-outline btn-sm" onClick={() => handleDelete(c)}>Delete</button>
                   </div>
                 </div>
               ))}
@@ -120,12 +144,12 @@ export default function Clans() {
             <div className="form-group"><label>Tag (2-4 chars)</label><input value={form.tag} onChange={(e) => setForm({ ...form, tag: e.target.value })} maxLength={4} required /></div>
             <div className="form-group"><label>Description</label><textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <div className="form-group"><label>Max Members</label><input type="number" value={form.maxMembers} onChange={(e) => setForm({ ...form, maxMembers: parseInt(e.target.value) || 50 })} /></div>
+              <div className="form-group"><label>Max Members</label><input type="number" min="1" step="1" value={form.maxMembers} onChange={(e) => setForm({ ...form, maxMembers: Math.max(1, parseInt(e.target.value, 10) || 1) })} /></div>
               <div className="form-group"><label>Icon (emoji)</label><input value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} /></div>
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn btn-outline" onClick={() => setShowCreate(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Create</button>
+              <button type="button" className="btn btn-outline" onClick={() => setShowCreate(false)} disabled={saving}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Creating...' : 'Create'}</button>
             </div>
           </form>
         </Modal>
@@ -137,13 +161,13 @@ export default function Clans() {
             <div className="detail-grid">
               <div className="detail-item"><div className="detail-label">Tag</div><div className="detail-value">{showManage.tag}</div></div>
               <div className="detail-item"><div className="detail-label">Members</div><div className="detail-value">{showManage.members || showManage.memberCount || 0}/{showManage.maxMembers || 50}</div></div>
-              <div className="detail-item"><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${showManage.status}`}>{showManage.status}</span></div></div>
+              <div className="detail-item"><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${statusOf(showManage)}`}>{statusOf(showManage)}</span></div></div>
               <div className="detail-item"><div className="detail-label">Created</div><div className="detail-value">{showManage.createdAt ? new Date(showManage.createdAt).toLocaleDateString() : 'N/A'}</div></div>
             </div>
           </div>
           <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Members</h4>
           {(!showManage.membersList || showManage.membersList.length === 0) ? (
-            <p style={{ textAlign: 'center', padding: 16, color: 'var(--text-light)', fontSize: 13 }}>No members (API returns empty data)</p>
+            <p style={{ textAlign: 'center', padding: 16, color: 'var(--text-light)', fontSize: 13 }}>No members yet.</p>
           ) : (
             <div className="table-wrapper" style={{ marginBottom: 16 }}>
               <table>
@@ -153,11 +177,11 @@ export default function Clans() {
                 <tbody>
                   {showManage.membersList?.map((m) => (
                     <tr key={m.id}>
-                      <td>{m.name || m.username}</td>
+                      <td>{m.name || m.username || '—'}</td>
                       <td><span className="badge" style={{ background: '#e0e7ff', color: '#3730a3' }}>{m.role || 'member'}</span></td>
                       <td>{m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : 'N/A'}</td>
                       <td>
-                        <button className="btn btn-danger btn-sm" onClick={() => api.removeClanMember(showManage.id, m.id).then(() => setShowManage({ ...showManage, membersList: showManage.membersList.filter((x) => x.id !== m.id) })).catch(() => {})}>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleKick(showManage, m)}>
                           Kick
                         </button>
                       </td>

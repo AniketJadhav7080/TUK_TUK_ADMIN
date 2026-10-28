@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 import { hasPermission, PERMISSIONS, ROLES } from '../permissions'
 import Modal from '../components/Modal'
 import Loading from '../components/Loading'
+import { ErrorState } from '../components/SkeletonLoader'
 import { api } from '../services/api'
 
 export default function Rooms() {
   const { user } = useAuth()
+  const { addToast } = useToast()
   const [rooms, setRooms] = useState([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -35,7 +38,7 @@ export default function Rooms() {
       if (Array.isArray(first)) all = first
       else if (first?.content) {
         all = [...first.content]
-        for (let p = 1; p < (first.totalPages || 1); p++) {
+        for (let p = 1; p < Math.min(first.totalPages || 1, 100); p++) {
           try {
             const pg = await api.getUsers(`?page=${p}&size=1000`)
             if (pg?.content) all.push(...pg.content)
@@ -74,10 +77,10 @@ export default function Rooms() {
       } catch (err) { setError(err?.message || 'Failed to load rooms') }
       finally { setLoading(false) }
     }
-    const loadCounts = async () => {
-      try { const r = await api.getActiveRoomsCount(); setActiveCount(r.activeRooms ?? r.count ?? r) } catch {}
+  const loadCounts = async () => {
+      try { const r = await api.getActiveRoomsCount(); setActiveCount(r?.activeRooms ?? r?.count ?? r) } catch {}
       try { const r = await api.getRoomCategoriesCount(); setCategoriesCount(r) } catch {}
-      try { const r = await api.getTotalParticipantsCount(); setTotalParticipants(r.totalParticipants ?? r.count ?? r) } catch {}
+      try { const r = await api.getTotalParticipantsCount(); setTotalParticipants(r?.totalParticipants ?? r?.count ?? r) } catch {}
     }
     loadRooms()
     loadCounts()
@@ -91,21 +94,31 @@ export default function Rooms() {
   const performAction = async () => {
     try {
       if (actionType === 'mute') {
-        await api.muteAllRoom(actionModal.id)
+        if (!actionModal.hostId) {
+          addToast('Host user not found for this room', 'error')
+          setActionModal(null)
+          return
+        }
+        await api.muteAllRoom(actionModal.id, actionModal.hostId)
+        addToast('All members muted in this room', 'success')
       }
       setActionModal(null)
-    } catch { setActionModal(null) }
+    } catch (err) {
+      addToast(err?.message || 'Failed to mute room', 'error')
+      setActionModal(null)
+    }
   }
 
   const handleDeactivate = async () => {
+    const room = deactivateModal
     try {
-      const room = deactivateModal
-      const code = room.countryCode || room.country || 'IN'
-      if (api.deactivateCountryRoom) await api.deactivateCountryRoom(code, room.id, false).catch(() => api.deactivateRoom(room.id))
-      else await api.deactivateRoom(room.id)
+      await api.deactivateRoom(room.id)
       setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, status: 'inactive' } : r))
-    } catch {}
-    setDeactivateModal(null)
+      addToast('Room deactivated', 'success')
+      setDeactivateModal(null)
+    } catch (err) {
+      addToast(err?.message || 'Failed to deactivate room', 'error')
+    }
   }
   const openEdit = (room) => {
     setEditForm({ roomName: room.roomName || room.name || '', imageUrl: room.imageUrl || room.image || '' })
@@ -128,40 +141,50 @@ export default function Rooms() {
       await api.updateRoom(editModal.id, { roomName: editForm.roomName, imageUrl: editForm.imageUrl || null, imageFile: editForm.imageFile })
       setRooms((prev) => prev.map((r) => r.id === editModal.id ? { ...r, roomName: editForm.roomName, name: editForm.roomName, imageUrl: editForm.imageUrl } : r))
       setEditModal(null)
+      addToast('Room updated', 'success')
     } catch (err) {
-      setEditError(err.message || 'Failed to update room (backend API not ready yet)')
+      setEditError(err.message || 'Failed to update room')
     }
   }
 
   const handleActivate = async (room) => {
     try {
-      const code = room.countryCode || room.country || 'IN'
-      if (api.deactivateCountryRoom) await api.deactivateCountryRoom(code, room.id, true).catch(() => api.activateRoom(room.id))
-      else await api.activateRoom(room.id)
+      await api.activateRoom(room.id)
       setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, status: 'active' } : r))
-    } catch {}
+      addToast('Room activated', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to activate room', 'error')
+    }
   }
   const handleHostChange = async (e) => {
     e.preventDefault()
     setHostChangeError('')
     try {
-      const room = hostChangeModal
-      const code = room.countryCode || room.country || 'IN'
-      if (api.transferCountryHost) await api.transferCountryHost(code, room.id, { hostId: newHostId, newHostId }).catch(() => api.transferHost(room.id, { newHostId }))
-      else await api.transferHost(room.id, { newHostId })
-      setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, host: newHostId, hostId: newHostId } : r)); setHostChangeModal(null); setNewHostId('')
+      await api.transferHost(hostChangeModal.id, { newHostId })
+      setRooms((prev) => prev.map((r) => r.id === hostChangeModal.id ? { ...r, host: newHostId, hostId: newHostId } : r))
+      setHostChangeModal(null)
+      setNewHostId('')
+      addToast('Host changed', 'success')
     } catch (err) {
       setHostChangeError(err.message || 'Transfer failed — user may already host a room')
     }
   }
 
-  const filtered = rooms.filter((r) =>
-    (r.roomName || r.name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (r.host || r.hostId || '').toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = rooms.filter((r) => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return String(r.roomName || r.name || '').toLowerCase().includes(q) ||
+      String(r.host || r.hostId || '').toLowerCase().includes(q)
+  })
 
   if (loading) return <Loading />
-  if (error) return <div className="error-message">{error}</div>
+  if (error) return <div style={{ padding: 24 }}><ErrorState message={error} onRetry={() => window.location.reload()} /></div>
+
+  const categoryCount = (() => {
+    if (categoriesCount == null) return new Set(rooms.map((r) => r.category).filter(Boolean)).size
+    if (typeof categoriesCount === 'number' || typeof categoriesCount === 'string') return categoriesCount
+    return categoriesCount.totalCategories ?? categoriesCount.count ?? Object.keys(categoriesCount).length
+  })()
 
   return (
     <div>
@@ -176,7 +199,7 @@ export default function Rooms() {
         </div>
         <div className="stats-card">
           <div className="label">Categories</div>
-          <div className="value">{categoriesCount?.totalCategories ?? (categoriesCount ? Object.keys(categoriesCount).length : new Set(rooms.map((r) => r.category)).size)}</div>
+          <div className="value">{categoryCount}</div>
           {categoriesCount?.categoryCounts && <div className="change" style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>{Object.entries(categoriesCount.categoryCounts).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ')}</div>}
         </div>
       </div>

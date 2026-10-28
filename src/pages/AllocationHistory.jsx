@@ -4,6 +4,12 @@ import { ROLES } from '../permissions'
 import { api } from '../services/api'
 import Loading from '../components/Loading'
 
+const formatDate = (v) => {
+  if (!v) return '—'
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString()
+}
+
 export default function AllocationHistory() {
   const { user } = useAuth()
   const role = user?.role
@@ -16,6 +22,7 @@ export default function AllocationHistory() {
   const [records, setRecords] = useState([])
   const [page, setPage] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
+  const [totalElements, setTotalElements] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -24,16 +31,17 @@ export default function AllocationHistory() {
       setError('')
       try {
         const data = isOwner
-          ? await api.getOwnerDiamondHistory(page).catch(() => [])
+          ? await api.getOwnerDiamondHistory(page)
           : isSuperAdmin
-            ? await api.getSuperAdminHistory().catch(() => [])
+            ? await api.getSuperAdminHistory()
             : isSeller
-              ? await api.getManagerRechargeHistory().catch(() => [])
+              ? await api.getManagerRechargeHistory()
               : []
         if (!cancelled) {
           const list = Array.isArray(data) ? data : (data?.content || [])
           setRecords(list)
-          if (data?.totalPages) setTotalPages(data.totalPages)
+          setTotalPages(data?.totalPages || 0)
+          setTotalElements(data?.totalElements ?? (Array.isArray(data) ? data.length : null))
         }
       } catch (e) {
         if (!cancelled) setError(e.message)
@@ -45,6 +53,8 @@ export default function AllocationHistory() {
     return () => { cancelled = true }
   }, [page])
 
+  const pageTotal = records.reduce((s, r) => s + (Number(r.amount) || 0), 0)
+
   if (loading) return <Loading text="Loading allocation history..." />
 
   return (
@@ -54,8 +64,8 @@ export default function AllocationHistory() {
       {isOwner && (
         <>
           <div className="stats-grid">
-            <div className="stats-card"><div className="label">Total Allocations</div><div className="value">{records.length}</div></div>
-            <div className="stats-card"><div className="label">Total Diamonds Allocated</div><div className="value" style={{ color: 'var(--primary)' }}>{records.reduce((s, r) => s + (r.amount || 0), 0).toLocaleString()}</div></div>
+            <div className="stats-card"><div className="label">Total Allocations</div><div className="value">{totalElements ?? records.length}</div></div>
+            <div className="stats-card"><div className="label">Total Diamonds {totalPages > 1 ? 'on this page' : 'allocated'}</div><div className="value" style={{ color: 'var(--primary)' }}>{pageTotal.toLocaleString()}</div></div>
           </div>
           <div className="card">
             <div className="card-header">Country-wise Allocation History</div>
@@ -71,7 +81,7 @@ export default function AllocationHistory() {
                         <td style={{ fontWeight: 500 }}>{r.country || r.countryCode || '—'}</td>
                         <td>{r.adminName || r.superAdminName || '—'}</td>
                         <td style={{ fontWeight: 600, color: 'var(--success)' }}>+{(r.amount || 0).toLocaleString()}</td>
-                        <td>{r.date ? new Date(r.date).toLocaleDateString() : '—'}</td>
+                        <td>{formatDate(r.date || r.createdAt)}</td>
                         <td style={{ color: 'var(--text-light)' }}>{r.note || '—'}</td>
                       </tr>
                     ))}
@@ -107,7 +117,7 @@ export default function AllocationHistory() {
                     <tr key={r.id || i}>
                       <td style={{ fontWeight: 500 }}>{r.sellerName || r.receiverName || '—'}</td>
                       <td style={{ fontWeight: 600, color: 'var(--success)' }}>+{(r.amount || 0).toLocaleString()}</td>
-                      <td>{r.date || r.createdAt || '—'}</td>
+                      <td>{formatDate(r.date || r.createdAt)}</td>
                       <td style={{ color: 'var(--text-light)' }}>{r.note || '—'}</td>
                     </tr>
                   ))}
@@ -137,8 +147,8 @@ export default function AllocationHistory() {
                       <td>{r.userName || r.user?.name || r.user?.username || '—'}</td>
                       <td>{r.country || '—'}</td>
                       <td style={{ fontWeight: 600, color: 'var(--success)' }}>+{(r.diamonds || 0).toLocaleString()}</td>
-                      <td>{r.amount ? `₹${r.amount}` : '—'}</td>
-                      <td>{r.date || r.createdAt || '—'}</td>
+                      <td>{r.amount != null ? `₹${Number(r.amount).toLocaleString()}` : '—'}</td>
+                      <td>{formatDate(r.date || r.createdAt)}</td>
                       <td style={{ color: 'var(--text-light)' }}>{r.note || '—'}</td>
                     </tr>
                   ))}

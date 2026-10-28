@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import Loading from '../components/Loading'
+import { ErrorState } from '../components/SkeletonLoader'
 import { api } from '../services/api'
 export default function Settings() {
   const [settings, setSettings] = useState(null)
@@ -7,20 +8,34 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  useEffect(() => {
+  const loadSettings = () => {
+    setLoading(true)
+    setError('')
     api.getSettings()
       .then((data) => {
-        if (data && !Array.isArray(data)) {
+        if (Array.isArray(data)) {
+          // Some backends return [{key, value}] — fold it into an object.
+          const obj = {}
+          data.forEach((row) => {
+            if (row && typeof row === 'object' && row.key != null) obj[row.key] = row.value
+            else if (row && typeof row === 'object') Object.assign(obj, row)
+          })
+          data = obj
+        }
+        if (data && typeof data === 'object') {
           // Backend uses maxReportsBeforeAutoBan; accept both key variants
           setSettings({
             ...data,
             maxReportCountBeforeBan: data.maxReportCountBeforeBan ?? data.maxReportsBeforeAutoBan,
           })
-        } else if (data) setSettings(data)
+        } else {
+          setError('Settings were not returned by the server.')
+        }
       })
-      .catch(() => { setError('Failed to load settings from server.') })
+      .catch((err) => { setError(err?.message || 'Failed to load settings from server.') })
       .finally(() => setLoading(false))
-  }, [])
+  }
+  useEffect(() => { loadSettings() }, [])
   const handleChange = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }))
   }
@@ -29,22 +44,26 @@ export default function Settings() {
     setMessage('')
     try {
       // Send both key variants so old and new backends accept it
-      await api.updateSettings({ ...settings, maxReportsBeforeAutoBan: settings.maxReportCountBeforeBan })
-      setMessage('Settings saved successfully!')
-    } catch {
-      setMessage('Failed to save settings.')
+      await api.updateSettings({
+        appName: settings.appName,
+        maxUsersPerRoom: settings.maxUsersPerRoom,
+        minAgeRequirement: settings.minAgeRequirement,
+        maxReportsBeforeAutoBan: settings.maxReportCountBeforeBan,
+        banDurationDays: settings.banDurationDays,
+        maintenanceMode: settings.maintenanceMode,
+        requirePhoneVerification: settings.requirePhoneVerification,
+        allowGuestAccess: settings.allowGuestAccess,
+      })
+      setMessage('success')
+    } catch (err) {
+      setMessage(err?.message || 'Failed to save settings.')
     }
     setSaving(false)
-    setTimeout(() => setMessage(''), 3000)
+    setTimeout(() => setMessage(''), 4000)
   }
   if (loading) return <Loading />
   if (!settings) {
-    return (
-      <div>
-        {error && <div style={{ marginBottom: 16, padding: 10, borderRadius: 'var(--radius)', background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>{error}</div>}
-        <Loading />
-      </div>
-    )
+    return <div style={{ padding: 24 }}><ErrorState message={error || 'Settings were not returned by the server.'} onRetry={loadSettings} /></div>
   }
   return (
     <div>
@@ -88,8 +107,8 @@ export default function Settings() {
             </label>
           </div>
           {message && (
-            <div style={{ marginTop: 16, padding: 10, borderRadius: 'var(--radius)', background: message.includes('success') ? '#d1fae5' : '#fee2e2', color: message.includes('success') ? '#065f46' : '#991b1b', fontSize: 13 }}>
-              {message}
+            <div style={{ marginTop: 16, padding: 10, borderRadius: 'var(--radius)', background: message === 'success' ? '#d1fae5' : '#fee2e2', color: message === 'success' ? '#065f46' : '#991b1b', fontSize: 13 }}>
+              {message === 'success' ? 'Settings saved successfully!' : message}
             </div>
           )}
           <div style={{ marginTop: 20 }}>

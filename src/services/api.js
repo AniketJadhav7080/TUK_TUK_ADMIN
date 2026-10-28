@@ -14,8 +14,22 @@ export function resolveAssetUrl(u) {
 
 function toQuery(obj) {
   if (typeof obj === 'string') return obj;
-  const entries = Object.entries(obj || {}).filter(([, v]) => v !== '' && v !== undefined);
+  const entries = Object.entries(obj || {}).filter(([, v]) => v !== '' && v !== undefined && v !== null);
   return entries.length ? '?' + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&') : '';
+}
+
+const enc = (v) => encodeURIComponent(String(v))
+
+// Gift create: POST /gifts is multipart/form-data (iconFile/animationFile optional)
+function toGiftFormData(data, files = {}) {
+  const fd = new FormData()
+  ;['code', 'name', 'iconUrl', 'animationUrl', 'category', 'price', 'active', 'giftExpiryDays'].forEach((key) => {
+    const value = data[key]
+    if (value !== undefined && value !== null) fd.append(key, typeof value === 'boolean' ? String(value) : value)
+  })
+  if (files.iconFile) fd.append('iconFile', files.iconFile)
+  if (files.animationFile) fd.append('animationFile', files.animationFile)
+  return fd
 }
 
 async function request(endpoint, options = {}) {
@@ -33,7 +47,10 @@ async function request(endpoint, options = {}) {
   try { data = text ? JSON.parse(text) : null } catch { data = null }
   if (!res.ok) {
     if (res.status === 401 && !skipRedirect) { sessionStorage.removeItem('admin_token'); window.location.href = '/login'; }
-    throw new Error(data?.message || data?.error || res.statusText || 'Request failed');
+    const error = new Error(data?.message || data?.error || res.statusText || 'Request failed');
+    error.status = res.status;
+    error.data = data;
+    throw error;
   }
   return data;
 }
@@ -68,7 +85,7 @@ export const api = {
 
   // Users
   getUsers: (params = '') => request(`/users${toQuery(params)}`),
-  getUser: (id) => request(`/users/${id}`),
+  getUser: (id) => request(`/users/${enc(id)}`),
   // Update user (new contract): PUT multipart {name, email, phone, country,
   // officialRole, profilePicture(file)}. Falls back to legacy PATCH JSON.
   updateUser: async (id, data) => {
@@ -83,14 +100,14 @@ export const api = {
     if (role) fd.append('officialRole', role)
     if (data.avatarFile instanceof File) fd.append('profilePicture', data.avatarFile)
     try {
-      return await request(`/users/${id}`, { method: 'PUT', body: fd })
+      return await request(`/users/${enc(id)}`, { method: 'PUT', body: fd })
     } catch {
       const legacy = { name: data.name, email: data.email }
       if (phone !== undefined) { legacy.phoneNumber = phone; legacy.phone = phone }
       if (country !== undefined) { legacy.countryName = country; legacy.country = country }
       if (data.countryCode) legacy.countryCode = data.countryCode
       if (role) legacy.role = role
-      return request(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(legacy) })
+      return request(`/users/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(legacy) })
     }
   },
   // Ban/unban (new contract): PATCH /users/{id}/ban?ban=true&banReason=...
@@ -101,18 +118,33 @@ export const api = {
     if (banned) { if (data.banReason) q.append('banReason', data.banReason) }
     else q.append('banReason', 'null')
     try {
-      return await request(`/users/${id}/ban?${q.toString()}`, { method: 'PATCH' })
+      return await request(`/users/${enc(id)}/ban?${q.toString()}`, { method: 'PATCH' })
     } catch {
-      return request(`/users/${id}/status`, { method: 'PATCH', body: JSON.stringify(data) })
+      return request(`/users/${enc(id)}/status`, { method: 'PATCH', body: JSON.stringify(data) })
     }
   },
-  updateUserVip: (id, data) => request(`/users/${id}/vip`, { method: 'PATCH', body: JSON.stringify(data) }),
-  deleteUser: (id) => request(`/users/${id}`, { method: 'DELETE' }),
+  updateUserVip: (id, data) => request(`/users/${enc(id)}/vip`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // Owner action: set the user's diamonds to 0
+  resetUserDiamonds: (id) => request(`/users/${enc(id)}/reset-diamonds`, { method: 'PATCH' }),
+  deleteUser: (id) => request(`/users/${enc(id)}`, { method: 'DELETE' }),
+  // Reactivate a deactivated user (self-deleted from app, soft-delete on backend)
+  reactivateUser: async (id) => {
+    try {
+      return await request(`/users/${enc(id)}/reactivate`, { method: 'PATCH' })
+    } catch {
+      return request(`/users/${enc(id)}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'active' }) })
+    }
+  },
+
+  // Device lock (Nikita admin)
+  getUserDevices: (userId) => request(`/admin/devices/user/${enc(userId)}`),
+  blockDevice: (deviceId) => request(`/admin/devices/${encodeURIComponent(deviceId)}/block`, { method: 'PUT' }),
+  unblockDevice: (deviceId) => request(`/admin/devices/${encodeURIComponent(deviceId)}/unblock`, { method: 'PUT' }),
 
   // Hosts
-  getHosts: (params = '') => request(`/hosts${toQuery(params)}`),
-  approveHost: (id) => request(`/hosts/approve/${id}`, { method: 'POST' }),
-  updateHostApproval: (id, data) => request(`/hosts/${id}/approve`, { method: 'PATCH', body: JSON.stringify(data) }),
+  getHosts: (params = '') => request(`/admin/hosts${toQuery(params)}`),
+  approveHost: (id) => request(`/hosts/approve/${enc(id)}`, { method: 'POST' }),
+  updateHostApproval: (id, data) => request(`/hosts/${enc(id)}/approve`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   // Rooms (Nikita admin)
   getAdminRooms: () => request('/admin/rooms'),
@@ -122,7 +154,7 @@ export const api = {
   getCountryRoomsByCode: (code) => request(`/country/${code}/rooms`),
   closeRoom: (id) => request(`/admin/rooms/${id}/close`, { method: 'POST', body: JSON.stringify({ reason: 'Policy violation' }) }),
   closeAdminRoom: (id, reason = 'Policy violation') => request(`/admin/rooms/${id}/close`, { method: 'POST', body: JSON.stringify({ reason }) }),
-  muteAllRoom: (id) => request(`/rooms/${id}/mute-all`, { method: 'POST' }),
+  muteAllRoom: (id, hostUserId, toggleMute = true) => request(`/admin/${id}/mute-all?hostUserId=${encodeURIComponent(hostUserId)}&toggleMute=${toggleMute}`, { method: 'PUT' }),
   kickUser: (roomId, userId) => request(`/rooms/${roomId}/kick/${userId}`, { method: 'POST' }),
   muteKick: (roomId, data) => request(`/rooms/${roomId}/mute-kick`, { method: 'POST', body: JSON.stringify(data) }),
   deactivateRoom: (id) => request(`/admin/rooms/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active: false }) }),
@@ -154,7 +186,7 @@ export const api = {
   getSuperAdminHistory: () => request('/super-admin/diamond-stock/history'),
   // Diamond Stock Manager
   getManagerDiamondSummary: () => request('/diamond-stock-manager/diamond-stock/summary'),
-  getManagerUser: (userId) => request(`/diamond-stock-manager/users/${userId}`),
+  getManagerUser: (userId) => request(`/diamond-stock-manager/users/${enc(userId)}`),
   managerWalletRecharge: (data) => request('/diamond-stock-manager/wallet/recharge', { method: 'POST', body: JSON.stringify(data) }),
   getManagerRechargeHistory: () => request('/diamond-stock-manager/wallet/recharge/history'),
 
@@ -171,9 +203,9 @@ export const api = {
   getMostSentGift: () => request('/gifts/most-sent'),
   getGiftTransactions: (params = '') => request(`/gifts/room-history${toQuery(params)}`),
   getDailyGifts: () => request('/gifts/daily'),
-  createGift: (data) => request('/gifts', { method: 'POST', body: JSON.stringify(data) }),
-  // Add Animation uses same POST /gifts API, payload just has animationUrl instead of iconUrl
-  createAnimation: (data) => request('/gifts', { method: 'POST', body: JSON.stringify(data) }),
+  createGift: (data, files) => request('/gifts', { method: 'POST', body: toGiftFormData(data, files) }),
+  // Add Animation uses same POST /gifts API (multipart), animationFile instead of iconFile
+  createAnimation: (data, files) => request('/gifts', { method: 'POST', body: toGiftFormData(data, files) }),
   updateGift: (id, data) => request(`/gifts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   patchGift: (id, data) => request(`/gifts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteGift: (id) => request(`/gifts/${id}`, { method: 'DELETE' }),
@@ -207,7 +239,8 @@ export const api = {
   notifyEvent: (id) => request(`/admin/events/notify/${id}`),
 
   // Notifications
-  getNotificationHistory: () => request('/notifications/history'),
+  getNotificationHistory: (page = 0, size = 100) => request(`/notifications/history?page=${page}&size=${size}`),
+  getMassJobStatus: (jobId) => request(`/notifications/mass/${jobId}/status`),
   sendNotification: (data) => {
     const fd = new FormData()
     if (data.image) { fd.append('image', data.image); delete data.image }

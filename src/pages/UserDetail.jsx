@@ -1,64 +1,104 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 import { hasPermission, PERMISSIONS } from '../permissions'
 import Modal from '../components/Modal'
 import Loading from '../components/Loading'
+import { ErrorState } from '../components/SkeletonLoader'
 import { api } from '../services/api'
+
+function formatDate(v) {
+  if (!v) return '-'
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString()
+}
 
 export default function UserDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { user: admin } = useAuth()
+  const { addToast } = useToast()
   const [user, setUser] = useState(null)
+  const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [banModal, setBanModal] = useState(false)
+  const [banReason, setBanReason] = useState('')
   const [editing, setEditing] = useState(false)
   const [editForm, setEditForm] = useState({})
+
+  const isBanned = user?.banned === true || user?.status === 'banned'
 
   const canBan = hasPermission(admin, PERMISSIONS.BAN_USERS)
   const canEdit = hasPermission(admin, PERMISSIONS.EDIT_USERS)
   const canVerifyVip = hasPermission(admin, PERMISSIONS.VERIFY_VIP)
 
-  useEffect(() => {
-    const fetchUser = async () => {
-      setLoading(true)
-      try {
-        const data = await api.getUser(id)
-        if (data) setUser(data)
+  const fetchUser = async () => {
+    setLoading(true)
+    setDevices([])
+    try {
+      const data = await api.getUser(id)
+      if (data) {
+        setUser(data)
         setError('')
-      } catch (err) {
-        setError('Failed to load user details')
-      } finally {
-        setLoading(false)
+      } else {
+        setError('User not found')
       }
+    } catch (err) {
+      setError(err?.message || 'Failed to load user details')
+    } finally {
+      setLoading(false)
     }
-    fetchUser()
-  }, [id])
+    // Devices load independently — user page still renders if this fails
+    try {
+      const devs = await api.getUserDevices(id)
+      const list = Array.isArray(devs) ? devs : (devs?.content || devs?.devices || devs?.data || [])
+      setDevices(list)
+    } catch { /* devices are optional */ }
+  }
+
+  useEffect(() => { fetchUser() }, [id])
 
   const handleBan = async () => {
+    const banning = !isBanned
     try {
-      await api.updateUserStatus(id, { status: user.status === 'banned' ? 'active' : 'banned' })
-      setUser((prev) => ({ ...prev, status: prev.status === 'banned' ? 'active' : 'banned' }))
+      await api.updateUserStatus(id, {
+        status: banning ? 'banned' : 'active',
+        banReason: banning ? (banReason.trim() || undefined) : undefined,
+      })
+      setUser((prev) => ({ ...prev, banned: banning, status: banning ? 'banned' : 'active' }))
       setBanModal(false)
-    } catch { setBanModal(false) }
+      setBanReason('')
+      addToast(banning ? 'User banned' : 'User unbanned', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to update user status', 'error')
+    }
   }
 
   const handleSaveEdit = async () => {
     try {
       const payload = { name: editForm.name, email: editForm.email, phoneNumber: editForm.phoneNumber, countryCode: editForm.countryCode, countryName: editForm.countryName, gender: editForm.gender, age: editForm.age }
       await api.updateUser(id, payload)
-      setUser((prev) => ({ ...prev, ...payload }))
+      // Re-read so the page reflects what the backend actually stored.
+      const fresh = await api.getUser(id).catch(() => null)
+      if (fresh) setUser(fresh)
+      else setUser((prev) => ({ ...prev, ...payload }))
       setEditing(false)
-    } catch { setEditing(false) }
+      addToast('User updated successfully', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to update user', 'error')
+    }
   }
 
   const toggleVip = async () => {
     try {
       await api.updateUserVip(id, { vip: !user.vip })
       setUser((prev) => ({ ...prev, vip: !prev.vip }))
-    } catch {}
+      addToast(user.vip ? 'VIP removed' : 'VIP granted', 'success')
+    } catch (err) {
+      addToast(err?.message || 'Failed to update VIP status', 'error')
+    }
   }
 
   const openEdit = () => {
@@ -71,8 +111,8 @@ export default function UserDetail() {
   }
 
   if (loading) return <Loading />
-  if (error) return <div className="error-message">{error}</div>
-  if (!user) return <div className="loading">User not found</div>
+  if (error) return <div style={{ padding: 24 }}><ErrorState message={error} onRetry={fetchUser} /></div>
+  if (!user) return <div style={{ padding: 24 }}><ErrorState message="User not found" onRetry={fetchUser} /></div>
 
   return (
     <div>
@@ -82,10 +122,10 @@ export default function UserDetail() {
         <div className="card-header">
           <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--primary)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
-              {user.name.charAt(0)}
+              {(user.name || user.email || 'U').charAt(0).toUpperCase()}
             </span>
-            {user.name}
-            <span className={`badge ${user.status}`} style={{ marginLeft: 8 }}>{user.status}</span>
+            {user.name || 'Unnamed user'}
+            <span className={`badge ${isBanned ? 'banned' : user.status}`} style={{ marginLeft: 8 }}>{isBanned ? 'banned' : user.status}</span>
             {user.vip && <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>VIP</span>}
           </span>
         </div>
@@ -113,19 +153,19 @@ export default function UserDetail() {
             </div>
             <div className="detail-item">
               <div className="detail-label">Joined</div>
-              <div className="detail-value">{user.joined}</div>
+              <div className="detail-value">{formatDate(user.joined || user.createdAt)}</div>
             </div>
             <div className="detail-item">
               <div className="detail-label">Last Active</div>
-              <div className="detail-value">{user.lastActive || '-'}</div>
+              <div className="detail-value">{formatDate(user.lastActive || user.lastActiveAt)}</div>
             </div>
             <div className="detail-item">
               <div className="detail-label">Active Rooms</div>
-              <div className="detail-value">{user.rooms}</div>
+              <div className="detail-value">{user.rooms ?? user.roomsJoinTillNow ?? user.activeRooms ?? 0}</div>
             </div>
             <div className="detail-item">
               <div className="detail-label">Reports</div>
-              <div className="detail-value">{user.reports}</div>
+              <div className="detail-value">{user.reports ?? user.reportsCount ?? 0}</div>
             </div>
             <div className="detail-item">
               <div className="detail-label">Total Messages</div>
@@ -139,48 +179,35 @@ export default function UserDetail() {
 
           <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
             <h4 style={{ marginBottom: 12, fontWeight: 600 }}>Device & IP Tracking</h4>
-            <div className="detail-grid">
-              <div className="detail-item">
-                <div className="detail-label">Current Device</div>
-                <div className="detail-value">{user.device || '-'}</div>
-              </div>
-              <div className="detail-item">
-                <div className="detail-label">Operating System</div>
-                <div className="detail-value">{user.os || '-'}</div>
-              </div>
-              <div className="detail-item">
-                <div className="detail-label">Current IP</div>
-                <div className="detail-value" style={{ fontFamily: 'monospace' }}>{user.ip || '-'}</div>
-              </div>
-              <div className="detail-item">
-                <div className="detail-label">Last Known IP</div>
-                <div className="detail-value" style={{ fontFamily: 'monospace' }}>{user.lastIp || '-'}</div>
-              </div>
-            </div>
-
-            {user.deviceHistory && user.deviceHistory.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text-light)' }}>Device Login History</div>
-                <div className="table-wrapper">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Device</th>
-                        <th>IP Address</th>
-                        <th>Date</th>
+            {devices.length === 0 ? (
+              <p style={{ color: 'var(--text-light)', fontSize: 13 }}>No devices found</p>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Device</th>
+                      <th>OS</th>
+                      <th>IP</th>
+                      <th>Last Login</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {devices.map((d) => (
+                      <tr key={d.deviceId || d.id}>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{d.deviceModel || '-'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-light)', fontFamily: 'monospace' }}>{d.deviceId || d.id || '-'}</div>
+                        </td>
+                        <td style={{ fontSize: 13 }}>{d.osType ? `${d.osType} ${d.osVersion || ''}` : '-'}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.ipAddress || '-'}</td>
+                        <td style={{ fontSize: 12 }}>{d.lastLoginAt ? new Date(d.lastLoginAt).toLocaleString() : '-'}</td>
+                        <td><span className={`badge ${d.blocked ? 'banned' : 'active'}`}>{d.blocked ? 'Blocked' : 'Active'}</span></td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {user.deviceHistory.map((d, i) => (
-                        <tr key={i}>
-                          <td>{d.device}</td>
-                          <td style={{ fontFamily: 'monospace' }}>{d.ip}</td>
-                          <td>{d.date}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
@@ -193,8 +220,8 @@ export default function UserDetail() {
               </button>
             )}
             {canBan && (
-              <button className={`btn ${user.status === 'banned' ? 'btn-success' : 'btn-danger'}`} onClick={() => setBanModal(true)}>
-                {user.status === 'banned' ? 'Unban User' : 'Ban User'}
+              <button className={`btn ${isBanned ? 'btn-success' : 'btn-danger'}`} onClick={() => { setBanReason(''); setBanModal(true) }}>
+                {isBanned ? 'Unban User' : 'Ban User'}
               </button>
             )}
           </div>
@@ -202,12 +229,18 @@ export default function UserDetail() {
       </div>
 
       {banModal && (
-        <Modal title={user.status === 'banned' ? 'Unban User' : 'Ban User'} onClose={() => setBanModal(false)}>
-          <p>Are you sure you want to {user.status === 'banned' ? 'unban' : 'ban'} <strong>{user.name}</strong>?</p>
+        <Modal title={isBanned ? 'Unban User' : 'Ban User'} onClose={() => setBanModal(false)}>
+          <p>Are you sure you want to {isBanned ? 'unban' : 'ban'} <strong>{user.name}</strong>?</p>
+          {!isBanned && (
+            <div className="form-group" style={{ marginTop: 12 }}>
+              <label>Ban Reason (optional)</label>
+              <input value={banReason} onChange={(e) => setBanReason(e.target.value)} placeholder="e.g. spam, abuse..." />
+            </div>
+          )}
           <div className="modal-actions">
             <button className="btn btn-outline" onClick={() => setBanModal(false)}>Cancel</button>
-            <button className={`btn ${user.status === 'banned' ? 'btn-success' : 'btn-danger'}`} onClick={handleBan}>
-              {user.status === 'banned' ? 'Unban' : 'Ban'}
+            <button className={`btn ${isBanned ? 'btn-success' : 'btn-danger'}`} onClick={handleBan}>
+              {isBanned ? 'Unban' : 'Ban'}
             </button>
           </div>
         </Modal>

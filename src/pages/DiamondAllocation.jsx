@@ -17,7 +17,6 @@ export default function DiamondAllocation() {
   const [error, setError] = useState('')
   const [summary, setSummary] = useState(null)
 
-  const [countries, setCountries] = useState([])
   const [allocateCountry, setAllocateCountry] = useState('')
   const [allocateAmount, setAllocateAmount] = useState('')
   const [allocateNote, setAllocateNote] = useState('')
@@ -85,18 +84,26 @@ export default function DiamondAllocation() {
 
   const handleAllocate = async (e) => {
     e.preventDefault()
-    if (!selectedSuperAdmin || !allocateAmount) return
+    const amount = Number(allocateAmount)
+    if (!selectedSuperAdmin || !Number.isFinite(amount) || amount <= 0) {
+      addToast('Enter a valid diamond amount', 'error')
+      return
+    }
     try {
       await api.ownerAllocateDiamond({
-        targetAdminId: parseInt(selectedSuperAdmin),
+        targetAdminId: selectedSuperAdmin,
         country: allocateCountry || undefined,
-        amount: parseInt(allocateAmount),
+        amount,
         note: allocateNote || 'Stock allocation',
       })
-      setSummary((prev) => prev ? { ...prev, totalDiamondsCredited: (prev.totalDiamondsCredited || prev.allocated || 0) + parseInt(allocateAmount) } : prev)
+      setSummary((prev) => prev ? {
+        ...prev,
+        totalAdminsCredited: (prev.totalAdminsCredited || 0) + 1,
+        totalDiamondsCredited: (prev.totalDiamondsCredited || prev.allocated || 0) + amount,
+      } : prev)
       setAllocateAmount('')
       setAllocateNote('')
-      addToast(`Credited ${parseInt(allocateAmount).toLocaleString()} diamonds`, 'success')
+      addToast(`Credited ${amount.toLocaleString()} diamonds`, 'success')
     } catch (e) {
       addToast('Allocation failed: ' + (e.message || 'Server error'), 'error')
     }
@@ -104,43 +111,68 @@ export default function DiamondAllocation() {
 
   const handleDistribute = async (e) => {
     e.preventDefault()
-    if (!distributeSeller || !distributeAmount) return
+    const amount = Number(distributeAmount)
+    if (!distributeSeller || !Number.isFinite(amount) || amount <= 0) {
+      addToast('Enter a valid diamond amount', 'error')
+      return
+    }
     try {
-      await api.superAdminDistribute({ targetManagerId: parseInt(distributeSeller), amount: parseInt(distributeAmount), note: distributeNote || 'Stock transfer' })
-      setSummary((prev) => prev ? { ...prev, distributedDiamonds: (prev.distributedDiamonds || prev.distributed || 0) + parseInt(distributeAmount), remainingDiamonds: (prev.remainingDiamonds || prev.remaining || 0) - parseInt(distributeAmount) } : prev)
+      await api.superAdminDistribute({ targetManagerId: distributeSeller, amount, note: distributeNote || 'Stock transfer' })
+      setSummary((prev) => prev ? {
+        ...prev,
+        distributedDiamonds: (prev.distributedDiamonds || prev.distributed || 0) + amount,
+        remainingDiamonds: Math.max(0, (prev.remainingDiamonds || prev.remaining || 0) - amount),
+      } : prev)
       setDistributeSeller('')
       setDistributeAmount('')
       setDistributeNote('')
-      addToast(`Distributed ${parseInt(distributeAmount).toLocaleString()} diamonds to manager`, 'success')
+      addToast(`Distributed ${amount.toLocaleString()} diamonds to manager`, 'success')
     } catch (e) {
       addToast('Distribution failed: ' + (e.message || 'Server error'), 'error')
     }
   }
 
   const handleLookup = async () => {
+    const id = lookupId.trim()
+    if (!id) {
+      addToast('Enter a user ID to look up', 'error')
+      return
+    }
+    setUserLookup(null)
     try {
-      const data = await api.getManagerUser(lookupId)
-      setUserLookup(data)
-    } catch {
-      setUserLookup({ error: 'User not found' })
+      const data = await api.getManagerUser(id)
+      if (!data) setUserLookup({ error: 'User not found' })
+      else setUserLookup(data)
+    } catch (err) {
+      setUserLookup({ error: err?.message || 'User not found' })
     }
   }
 
   const handleRecharge = async (e) => {
     e.preventDefault()
     if (!userLookup?.id) return
+    const diamonds = Number(rechargeForm.diamonds)
+    const amount = Number(rechargeForm.amount) || 0
+    if (!Number.isFinite(diamonds) || diamonds <= 0) {
+      addToast('Enter a valid diamond amount', 'error')
+      return
+    }
+    if (amount < 0) {
+      addToast('Amount cannot be negative', 'error')
+      return
+    }
     setRechargeLoading(true)
     try {
       await api.managerWalletRecharge({
         userId: userLookup.id,
-        diamonds: parseInt(rechargeForm.diamonds) || 0,
-        amountInRupees: parseFloat(rechargeForm.amount) || 0,
+        diamonds,
+        amountInRupees: amount,
         note: rechargeForm.note || 'Cash recharge',
       })
       setRechargeForm({ diamonds: '', amount: '', note: '' })
       setUserLookup(null)
       setLookupId('')
-      addToast(`Recharged ${parseInt(rechargeForm.diamonds).toLocaleString()} diamonds to user`, 'success')
+      addToast(`Recharged ${diamonds.toLocaleString()} diamonds to user`, 'success')
     } catch (e) {
       addToast('Recharge failed: ' + (e.message || 'Server error'), 'error')
     } finally {
@@ -168,7 +200,7 @@ export default function DiamondAllocation() {
                   <select value={selectedSuperAdmin} onChange={(e) => {
                     const sa = superAdmins.find((a) => String(a.id) === e.target.value)
                     setSelectedSuperAdmin(e.target.value)
-                    if (sa?.country) setAllocateCountry(sa.country)
+                    setAllocateCountry(sa?.country || '')
                   }} required
                     style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14 }}>
                     <option value="">Select Super Admin...</option>
@@ -179,7 +211,7 @@ export default function DiamondAllocation() {
                 </div>
                 <div className="form-group" style={{ flex: 1, minWidth: 150 }}>
                   <label>Diamonds</label>
-                  <input type="number" value={allocateAmount} onChange={(e) => setAllocateAmount(e.target.value)} required placeholder="Amount" />
+                  <input type="number" min="1" step="1" value={allocateAmount} onChange={(e) => setAllocateAmount(e.target.value)} required placeholder="Amount" />
                 </div>
                 <div className="form-group" style={{ flex: 1, minWidth: 150 }}>
                   <label>Note</label>
@@ -217,7 +249,7 @@ export default function DiamondAllocation() {
                 </div>
                 <div className="form-group" style={{ flex: 1, minWidth: 150 }}>
                   <label>Diamonds</label>
-                  <input type="number" value={distributeAmount} onChange={(e) => setDistributeAmount(e.target.value)} required placeholder="Amount" />
+                  <input type="number" min="1" step="1" value={distributeAmount} onChange={(e) => setDistributeAmount(e.target.value)} required placeholder="Amount" />
                 </div>
                 <div className="form-group" style={{ flex: 1, minWidth: 150 }}>
                   <label>Note</label>
@@ -256,8 +288,8 @@ export default function DiamondAllocation() {
               {userLookup && !userLookup.error && (
                 <form onSubmit={handleRecharge}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-                    <div className="form-group"><label>Diamonds</label><input type="number" value={rechargeForm.diamonds} onChange={(e) => setRechargeForm({ ...rechargeForm, diamonds: e.target.value })} required /></div>
-                    <div className="form-group"><label>Amount (₹)</label><input type="number" step="0.01" value={rechargeForm.amount} onChange={(e) => setRechargeForm({ ...rechargeForm, amount: e.target.value })} /></div>
+                    <div className="form-group"><label>Diamonds</label><input type="number" min="1" step="1" value={rechargeForm.diamonds} onChange={(e) => setRechargeForm({ ...rechargeForm, diamonds: e.target.value })} required /></div>
+                    <div className="form-group"><label>Amount (₹)</label><input type="number" min="0" step="0.01" value={rechargeForm.amount} onChange={(e) => setRechargeForm({ ...rechargeForm, amount: e.target.value })} /></div>
                     <div className="form-group"><label>Note</label><input value={rechargeForm.note} onChange={(e) => setRechargeForm({ ...rechargeForm, note: e.target.value })} placeholder="Optional" /></div>
                   </div>
                   <button type="submit" className="btn btn-success" style={{ marginTop: 12 }} disabled={rechargeLoading}>
