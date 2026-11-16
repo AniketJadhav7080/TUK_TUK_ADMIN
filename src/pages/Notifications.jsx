@@ -148,9 +148,16 @@ export default function Notifications() {
       if (type === 'notification' && audience === 'specific' && !specificUserId.trim()) {
         throw new Error('Please enter User ID for specific user')
       }
+      // Title and message are optional for every notification type, but require
+      // at least one of title, message or image so an empty notification isn't sent.
+      if (!title.trim() && !message.trim() && !image) {
+        throw new Error('Please provide a title, message or image')
+      }
       const recipient = recipientMap[audience] || 'ALL_USERS'
       const apiType = typeMap[type] || 'ADMIN_BROADCAST'
-      const payload = { title, body: message, recipient, type: apiType }
+      const payload = { recipient, type: apiType }
+      if (title.trim()) payload.title = title.trim()
+      if (message.trim()) payload.body = message.trim()
       if (recipient === 'SELECTED_USERS') payload.userIds = [specificUserId.trim()]
       else if (schedule) payload.schedule = schedule
       const wasScheduled = !!schedule
@@ -213,16 +220,15 @@ export default function Notifications() {
 
           <form onSubmit={handleSend}>
             <div className="form-group">
-              <label>Title</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Notification title..." required />
+              <label>Title <span style={{ color: 'var(--text-light)', fontWeight: 400 }}>(optional)</span></label>
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Notification title (optional)..." />
             </div>
             <div className="form-group">
-              <label>Message</label>
+              <label>Message <span style={{ color: 'var(--text-light)', fontWeight: 400 }}>(optional)</span></label>
               <textarea
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Write your message..."
-                required
+                placeholder="Write your message (optional)..."
                 style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, minHeight: 100, resize: 'vertical', fontFamily: 'inherit' }}
               />
             </div>
