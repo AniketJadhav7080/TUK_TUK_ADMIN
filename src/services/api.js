@@ -249,7 +249,13 @@ export const api = {
   },
   sendMassNotification: (data, image) => {
     const fd = new FormData()
-    const payload = { title: data.title, body: data.message || data.body, recipient: data.recipient || 'ALL_USERS', type: data.type }
+    // Forward every field the caller set (title, body, recipient, type, schedule, ...),
+    // so scheduled broadcasts keep their `schedule` value instead of being dropped.
+    const payload = { ...data }
+    payload.recipient = payload.recipient || 'ALL_USERS'
+    if (payload.body == null && payload.message != null) payload.body = payload.message
+    delete payload.message
+    delete payload.image
     if (image) fd.append('image', image)
     else if (data.image) fd.append('image', data.image)
     fd.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))

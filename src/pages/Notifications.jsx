@@ -159,7 +159,11 @@ export default function Notifications() {
       if (title.trim()) payload.title = title.trim()
       if (message.trim()) payload.body = message.trim()
       if (recipient === 'SELECTED_USERS') payload.userIds = [specificUserId.trim()]
-      else if (schedule) payload.schedule = schedule
+      if (schedule) {
+        const when = new Date(schedule)
+        if (Number.isNaN(when.getTime())) throw new Error('Invalid schedule date/time')
+        payload.schedule = when.toISOString()
+      }
       const wasScheduled = !!schedule
       let response
       if (recipient === 'SELECTED_USERS') {
