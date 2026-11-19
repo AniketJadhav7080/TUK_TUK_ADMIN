@@ -6,22 +6,6 @@ import { useToast } from '../context/ToastContext'
 const POLL_INTERVAL = 30 * 1000
 const POLL_MAX_DURATION = 5 * 60 * 1000
 
-async function fetchAllHistory() {
-  const data = await api.getNotificationHistory(0, 100)
-  if (Array.isArray(data)) return data
-  if (data?.content) {
-    // Paginated response: fetch every page so the full history shows
-    const all = [...data.content]
-    const totalPages = Math.min(data.totalPages || 1, 50)
-    for (let p = 1; p < totalPages; p++) {
-      const page = await api.getNotificationHistory(p, data.size || 100).catch(() => null)
-      if (page?.content) all.push(...page.content)
-    }
-    return all
-  }
-  return data?.notifications || data?.data || []
-}
-
 const formatDate = (v) => {
   if (!v) return { date: '—', time: '—' }
   const d = new Date(v)
@@ -36,6 +20,7 @@ const formatDateTime = (v) => {
 }
 
 const SCHEDULED_PAGE_SIZE = 20
+const HISTORY_PAGE_SIZE = 20
 
 const normalizeHistory = (n, idx) => {
   const when = n.createdAt || n.sentAt || n.date || n.timestamp
@@ -69,6 +54,10 @@ export default function Notifications() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [historyPage, setHistoryPage] = useState(0)
+  const [historyTotalPages, setHistoryTotalPages] = useState(0)
+  const [historyTotal, setHistoryTotal] = useState(0)
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [historyTab, setHistoryTab] = useState('history')
   const [scheduled, setScheduled] = useState([])
   const [scheduledLoading, setScheduledLoading] = useState(false)
@@ -89,24 +78,31 @@ export default function Notifications() {
   }, [])
 
 
-  const setHistoryList = (list) => setHistory((Array.isArray(list) ? list : []).map(normalizeHistory))
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const list = await fetchAllHistory()
-        if (!cancelled) setHistoryList(list)
-      } catch (e) {
-        if (!cancelled) setError(e.message || 'Failed to load history')
-      } finally {
-        if (!cancelled) setLoading(false)
+  const loadHistory = async (page = 0, { initial = false } = {}) => {
+    if (initial) setLoading(true)
+    else setHistoryLoading(true)
+    setError(null)
+    try {
+      const data = await api.getNotificationHistory(page, HISTORY_PAGE_SIZE)
+      if (!mountedRef.current) return
+      const list = Array.isArray(data) ? data : (data?.content || data?.notifications || data?.data || [])
+      setHistory(list.map(normalizeHistory))
+      setHistoryPage(Array.isArray(data) ? page : (data?.number ?? page))
+      setHistoryTotalPages(Array.isArray(data) ? 1 : (data?.totalPages ?? (list.length ? 1 : 0)))
+      setHistoryTotal(Array.isArray(data) ? list.length : (data?.totalElements ?? list.length))
+    } catch (e) {
+      if (mountedRef.current) setError(e?.message || 'Failed to load history')
+    } finally {
+      if (mountedRef.current) {
+        if (initial) setLoading(false)
+        else setHistoryLoading(false)
       }
     }
-    load()
-    return () => { cancelled = true }
+  }
+
+  useEffect(() => {
+    loadHistory(0, { initial: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const loadScheduled = async (page = 0) => {
@@ -148,10 +144,7 @@ export default function Notifications() {
 
       if (status && (status.status === 'COMPLETED' || status.status === 'FAILED')) {
         setJob({ jobId, status: status.status })
-        try {
-          const list = await fetchAllHistory()
-          if (mountedRef.current) setHistoryList(list)
-        } catch { /* history refresh failed */ }
+        await loadHistory(0).catch(() => {})
         if (!mountedRef.current) return
         addToast(
           status.status === 'COMPLETED' ? 'Notification sent successfully' : (status.errorMessage || 'Notification failed'),
@@ -165,10 +158,7 @@ export default function Notifications() {
 
       const elapsed = Date.now() - startedAt
       if (elapsed >= POLL_MAX_DURATION) {
-        try {
-          const list = await fetchAllHistory()
-          if (mountedRef.current) setHistoryList(list)
-        } catch { /* ignore */ }
+        await loadHistory(0).catch(() => {})
         if (mountedRef.current) setJob(null)
         return
       }
@@ -222,12 +212,12 @@ export default function Notifications() {
       if (response?.jobId && !wasScheduled) {
         // Async job (202 + jobId): show queued chip, refresh once, then poll status
         setJob({ jobId: response.jobId, status: response.status || 'QUEUED' })
-        fetchAllHistory().then((list) => { if (mountedRef.current) setHistoryList(list) }).catch(() => {})
+        loadHistory(0).catch(() => {})
         pollJob(response.jobId)
       } else {
         // Scheduled send or older backend without jobId
         setFeedback(wasScheduled ? 'Scheduled!' : 'Sent successfully!')
-        fetchAllHistory().then((list) => { if (mountedRef.current) setHistoryList(list) }).catch(() => {})
+        loadHistory(0).catch(() => {})
         if (wasScheduled) loadScheduled(0)
         setTimeout(() => { if (mountedRef.current) setFeedback(null) }, 3000)
       }
@@ -329,7 +319,7 @@ export default function Notifications() {
             className={`btn btn-sm ${historyTab === 'history' ? 'btn-primary' : 'btn-outline'}`}
             onClick={() => openHistoryTab('history')}
           >
-            Notification History ({history.length})
+            Notification History ({historyTotal})
           </button>
           <button
             className={`btn btn-sm ${historyTab === 'scheduled' ? 'btn-primary' : 'btn-outline'}`}
@@ -340,37 +330,62 @@ export default function Notifications() {
         </div>
         <div className="card-body">
           {historyTab === 'history' ? (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Title</th>
-                    <th>Audience</th>
-                    <th>Status</th>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Reads</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.map((n) => (
-                    <tr key={n._key}>
-                      <td><span className="badge reported" style={{ textTransform: 'capitalize' }}>{n.type}</span></td>
-                      <td style={{ fontWeight: 500 }}>{n.title}</td>
-                      <td>{n.audience}</td>
-                      <td><span className={`badge ${String(n.status).toLowerCase()}`}>{n.status}</span></td>
-                      <td>{n.date}</td>
-                      <td>{n.time}</td>
-                      <td>{Number(n.reads || 0).toLocaleString()}</td>
+            <>
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Type</th>
+                      <th>Title</th>
+                      <th>Audience</th>
+                      <th>Status</th>
+                      <th>Date</th>
+                      <th>Time</th>
+                      <th>Reads</th>
                     </tr>
-                  ))}
-                  {history.length === 0 && (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No notifications sent yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {history.map((n) => (
+                      <tr key={n._key}>
+                        <td><span className="badge reported" style={{ textTransform: 'capitalize' }}>{n.type}</span></td>
+                        <td style={{ fontWeight: 500 }}>{n.title}</td>
+                        <td>{n.audience}</td>
+                        <td><span className={`badge ${String(n.status).toLowerCase()}`}>{n.status}</span></td>
+                        <td>{n.date}</td>
+                        <td>{n.time}</td>
+                        <td>{Number(n.reads || 0).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    {history.length === 0 && (
+                      <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No notifications sent yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {historyTotalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-light)' }}>
+                    Page {historyPage + 1} / {historyTotalPages} · {historyTotal} total{historyLoading ? ' · Loading…' : ''}
+                  </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      disabled={historyPage <= 0 || historyLoading}
+                      onClick={() => loadHistory(historyPage - 1)}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      disabled={historyPage >= historyTotalPages - 1 || historyLoading}
+                      onClick={() => loadHistory(historyPage + 1)}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <>
               {scheduledError && (
