@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { api } from '../services/api'
+import { api, resolveAssetUrl } from '../services/api'
 import Loading from '../components/Loading'
 import { useToast } from '../context/ToastContext'
 
@@ -28,6 +28,14 @@ const formatDate = (v) => {
   if (Number.isNaN(d.getTime())) return { date: String(v), time: '—' }
   return { date: d.toLocaleDateString(), time: d.toLocaleTimeString() }
 }
+
+const formatDateTime = (v) => {
+  if (!v) return '—'
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString()
+}
+
+const SCHEDULED_PAGE_SIZE = 20
 
 const normalizeHistory = (n, idx) => {
   const when = n.createdAt || n.sentAt || n.date || n.timestamp
@@ -61,6 +69,13 @@ export default function Notifications() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [historyTab, setHistoryTab] = useState('history')
+  const [scheduled, setScheduled] = useState([])
+  const [scheduledLoading, setScheduledLoading] = useState(false)
+  const [scheduledError, setScheduledError] = useState(null)
+  const [scheduledPage, setScheduledPage] = useState(0)
+  const [scheduledTotalPages, setScheduledTotalPages] = useState(0)
+  const [scheduledTotal, setScheduledTotal] = useState(0)
   const pollTimer = useRef(null)
   const mountedRef = useRef(true)
   const sendingRef = useRef(false)
@@ -93,6 +108,30 @@ export default function Notifications() {
     load()
     return () => { cancelled = true }
   }, [])
+
+  const loadScheduled = async (page = 0) => {
+    setScheduledLoading(true)
+    setScheduledError(null)
+    try {
+      const data = await api.getScheduledNotifications(page, SCHEDULED_PAGE_SIZE)
+      const list = Array.isArray(data) ? data : (data?.content || [])
+      if (mountedRef.current) {
+        setScheduled(list)
+        setScheduledPage(data?.number ?? page)
+        setScheduledTotalPages(data?.totalPages ?? (list.length ? 1 : 0))
+        setScheduledTotal(data?.totalElements ?? list.length)
+      }
+    } catch (e) {
+      if (mountedRef.current) setScheduledError(e?.message || 'Failed to load schedule history')
+    } finally {
+      if (mountedRef.current) setScheduledLoading(false)
+    }
+  }
+
+  const openHistoryTab = (key) => {
+    setHistoryTab(key)
+    if (key === 'scheduled') loadScheduled(scheduledPage)
+  }
 
   const typeMap = { notification: 'ADMIN_BROADCAST', announcement: 'ADMIN_ANNOUNCEMENT', promo: 'ADMIN_PROMOTIONAL' }
   const recipientMap = { all: 'ALL_USERS', active: 'ACTIVE_USERS', vip: 'VIP_USERS', inactive: 'INACTIVE_USERS', banned: 'BANNED_USERS', specific: 'SELECTED_USERS' }
@@ -160,9 +199,12 @@ export default function Notifications() {
       if (message.trim()) payload.body = message.trim()
       if (recipient === 'SELECTED_USERS') payload.userIds = [specificUserId.trim()]
       if (schedule) {
-        const when = new Date(schedule)
-        if (Number.isNaN(when.getTime())) throw new Error('Invalid schedule date/time')
-        payload.schedule = when.toISOString()
+        // Backend expects a local datetime without timezone, e.g. "2026-11-19T18:30:00".
+        // datetime-local gives "YYYY-MM-DDTHH:mm", so append seconds when missing.
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(schedule)) {
+          throw new Error('Invalid schedule date/time')
+        }
+        payload.schedule = schedule.length === 16 ? `${schedule}:00` : schedule
       }
       const wasScheduled = !!schedule
       let response
@@ -186,6 +228,7 @@ export default function Notifications() {
         // Scheduled send or older backend without jobId
         setFeedback(wasScheduled ? 'Scheduled!' : 'Sent successfully!')
         fetchAllHistory().then((list) => { if (mountedRef.current) setHistoryList(list) }).catch(() => {})
+        if (wasScheduled) loadScheduled(0)
         setTimeout(() => { if (mountedRef.current) setFeedback(null) }, 3000)
       }
     } catch (err) {
@@ -281,39 +324,134 @@ export default function Notifications() {
       </div>
 
       <div className="card">
-        <div className="card-header">Notification History ({history.length})</div>
+        <div className="card-header" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            className={`btn btn-sm ${historyTab === 'history' ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => openHistoryTab('history')}
+          >
+            Notification History ({history.length})
+          </button>
+          <button
+            className={`btn btn-sm ${historyTab === 'scheduled' ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => openHistoryTab('scheduled')}
+          >
+            Schedule History ({scheduledTotal})
+          </button>
+        </div>
         <div className="card-body">
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Title</th>
-                  <th>Audience</th>
-                  <th>Status</th>
-                  <th>Date</th>
-                  <th>Time</th>
-                  <th>Reads</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((n) => (
-                  <tr key={n._key}>
-                    <td><span className="badge reported" style={{ textTransform: 'capitalize' }}>{n.type}</span></td>
-                    <td style={{ fontWeight: 500 }}>{n.title}</td>
-                    <td>{n.audience}</td>
-                    <td><span className={`badge ${String(n.status).toLowerCase()}`}>{n.status}</span></td>
-                    <td>{n.date}</td>
-                    <td>{n.time}</td>
-                    <td>{Number(n.reads || 0).toLocaleString()}</td>
+          {historyTab === 'history' ? (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Title</th>
+                    <th>Audience</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Reads</th>
                   </tr>
-                ))}
-                {history.length === 0 && (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No notifications sent yet.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {history.map((n) => (
+                    <tr key={n._key}>
+                      <td><span className="badge reported" style={{ textTransform: 'capitalize' }}>{n.type}</span></td>
+                      <td style={{ fontWeight: 500 }}>{n.title}</td>
+                      <td>{n.audience}</td>
+                      <td><span className={`badge ${String(n.status).toLowerCase()}`}>{n.status}</span></td>
+                      <td>{n.date}</td>
+                      <td>{n.time}</td>
+                      <td>{Number(n.reads || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {history.length === 0 && (
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No notifications sent yet.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <>
+              {scheduledError && (
+                <div className="alert alert-error" style={{ marginBottom: 12 }}>
+                  Failed to load schedule history: {scheduledError}
+                  <button className="btn btn-outline btn-sm" style={{ marginLeft: 12 }} onClick={() => loadScheduled(scheduledPage)}>Retry</button>
+                </div>
+              )}
+              {scheduledLoading ? (
+                <Loading text="Loading schedule history..." />
+              ) : (
+                <>
+                  <div className="table-wrapper">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Image</th>
+                          <th>Title</th>
+                          <th>Message</th>
+                          <th>Audience</th>
+                          <th>Type</th>
+                          <th>Scheduled For</th>
+                          <th>Status</th>
+                          <th>Created</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scheduled.map((n) => (
+                          <tr key={n.id}>
+                            <td>
+                              {n.imageUrl ? (
+                                <img
+                                  src={resolveAssetUrl(n.imageUrl)}
+                                  alt=""
+                                  style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }}
+                                  onError={(e) => { e.currentTarget.style.display = 'none' }}
+                                />
+                              ) : '—'}
+                            </td>
+                            <td style={{ fontWeight: 500 }}>{n.title || '—'}</td>
+                            <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.body || ''}>{n.body || '—'}</td>
+                            <td>{n.recipient || '—'}</td>
+                            <td><span className="badge reported" style={{ textTransform: 'capitalize' }}>{n.type || '—'}</span></td>
+                            <td>{formatDateTime(n.schedule)}</td>
+                            <td><span className={`badge ${String(n.status || '').toLowerCase()}`}>{n.status || '—'}</span></td>
+                            <td>{formatDateTime(n.createdAt)}</td>
+                          </tr>
+                        ))}
+                        {scheduled.length === 0 && !scheduledError && (
+                          <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: 'var(--text-light)' }}>No scheduled notifications.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  {scheduledTotalPages > 1 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                      <span style={{ fontSize: 13, color: 'var(--text-light)' }}>
+                        Page {scheduledPage + 1} / {scheduledTotalPages} · {scheduledTotal} total
+                      </span>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          disabled={scheduledPage <= 0 || scheduledLoading}
+                          onClick={() => loadScheduled(scheduledPage - 1)}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          disabled={scheduledPage >= scheduledTotalPages - 1 || scheduledLoading}
+                          onClick={() => loadScheduled(scheduledPage + 1)}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>

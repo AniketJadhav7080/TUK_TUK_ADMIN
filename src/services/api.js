@@ -1,4 +1,4 @@
-const API_BASE = 'https://api.tuktuk.live/api';
+const API_BASE = 'https://trench-launch-bleach.ngrok-free.dev/api';
 
 export const API_ORIGIN = API_BASE.replace(/\/api$/, '');
 
@@ -240,6 +240,8 @@ export const api = {
 
   // Notifications
   getNotificationHistory: (page = 0, size = 100) => request(`/notifications/history?page=${page}&size=${size}`),
+  // Scheduled notifications (Spring page: { content, totalElements, totalPages, number, ... })
+  getScheduledNotifications: (page = 0, size = 20) => request(`/notifications/mass/scheduled?page=${page}&size=${size}`),
   getMassJobStatus: (jobId) => request(`/notifications/mass/${jobId}/status`),
   sendNotification: (data) => {
     const fd = new FormData()
